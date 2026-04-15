@@ -1219,6 +1219,11 @@ def dashboard():
     """Serve the simulation dashboard."""
     return send_from_directory(_DASHBOARD_DIR, 'index.html')
 
+@app.route('/favicon.png')
+def favicon():
+    """Serve the dashboard favicon."""
+    return send_from_directory(_DASHBOARD_DIR, 'favicon.png')
+
 @app.route('/metrics')
 def prometheus_metrics():
     """Prometheus metrics endpoint."""
