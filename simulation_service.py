@@ -63,11 +63,6 @@ CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://loc
 
 _DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), 'dashboard')
 
-@app.route('/')
-def dashboard():
-    """Serve the simulation dashboard."""
-    return send_from_directory(_DASHBOARD_DIR, 'index.html')
-
 # --- Prometheus Metrics ---
 SIM_BUILD_INFO = Info('simulation_service', 'Simulation service build info')
 SIM_BUILD_INFO.info({'version': '1.0.0', 'service': 'simulation-service'})
@@ -1218,6 +1213,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080'])
+
+@app.route('/')
+def dashboard():
+    """Serve the simulation dashboard."""
+    return send_from_directory(_DASHBOARD_DIR, 'index.html')
 
 # --- API Key Authentication ---
 SIMULATION_API_KEY = os.environ.get('SIMULATION_API_KEY', 'dev-key-change-in-production')
