@@ -20,9 +20,14 @@
 
 <!-- Header -->
 <div class="bg-emerald-700 text-white px-6 py-4 flex items-center justify-between shadow-sm">
-  <div class="flex items-center gap-3">
+  <div class="flex items-center gap-4">
     <span class="text-xl font-bold tracking-tight">smartprobe</span>
-    <span class="text-emerald-300 text-sm font-mono">/ dashboard</span>
+    <nav class="flex items-center gap-1 ml-2">
+      <button id="nav-dashboard" onclick="switchView('dashboard')"
+        class="text-sm px-3 py-1 rounded font-medium bg-white/20 text-white">Dashboard</button>
+      <button id="nav-analytics" onclick="switchView('analytics')"
+        class="text-sm px-3 py-1 rounded font-medium text-emerald-200 hover:bg-white/10">Analytics</button>
+    </nav>
   </div>
   <div class="flex items-center gap-3">
     <span id="api-label" class="text-xs font-mono text-emerald-300"></span>
@@ -31,7 +36,7 @@
   </div>
 </div>
 
-<div class="max-w-7xl mx-auto px-4 py-6 space-y-4">
+<div id="view-dashboard" class="max-w-7xl mx-auto px-4 py-6 space-y-4">
 
   <!-- Status Overview -->
   <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-3">
@@ -136,6 +141,171 @@
   <!-- Agent Grid -->
   <div id="agent-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4"></div>
 
+</div>
+
+<!-- Analytics View -->
+<div id="view-analytics" class="hidden max-w-7xl mx-auto px-4 py-6 space-y-6">
+  <div class="flex items-center justify-between">
+    <span class="text-xs text-slate-400 font-mono">Source: <span id="metrics-source" class="text-slate-600"></span></span>
+    <span id="metrics-updated" class="text-xs text-slate-400"></span>
+  </div>
+
+  <!-- Agent Pod Gauges -->
+  <div>
+    <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Agent Pods</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-pods-active" class="text-3xl font-bold text-emerald-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">Active</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-pods-succeeded" class="text-3xl font-bold text-green-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">Succeeded</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-pods-failed" class="text-3xl font-bold text-red-500">—</div>
+        <div class="text-xs text-slate-500 mt-1">Failed</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-pods-pending" class="text-3xl font-bold text-amber-500">—</div>
+        <div class="text-xs text-slate-500 mt-1">Pending</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HTTP Requests -->
+  <div>
+    <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">HTTP Requests</h2>
+    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Endpoint</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Total</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">2xx</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Errors</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Avg Latency</th>
+          </tr>
+        </thead>
+        <tbody id="m-http-table" class="divide-y divide-slate-100">
+          <tr><td colspan="5" class="px-4 py-3 text-slate-400 text-xs text-center">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Orchestration + Kueue -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+      <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Orchestration Events</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Action</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Success</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Failure</th>
+            </tr>
+          </thead>
+          <tbody id="m-orch-table" class="divide-y divide-slate-100">
+            <tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Kueue</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-4 space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+          <span class="text-sm text-slate-500">Status</span>
+          <span id="m-kueue-active" class="text-sm font-semibold text-slate-700">—</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-slate-500">Pending Workloads</span>
+          <span id="m-kueue-pending" class="text-sm font-bold text-amber-600">—</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-slate-500">Admitted Workloads</span>
+          <span id="m-kueue-admitted" class="text-sm font-bold text-violet-600">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Operations -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div>
+      <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Cleanup Operations</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Resource</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">OK</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Fail</th>
+            </tr>
+          </thead>
+          <tbody id="m-cleanup-table" class="divide-y divide-slate-100">
+            <tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Helm Operations</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Operation</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">OK</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Fail</th>
+            </tr>
+          </thead>
+          <tbody id="m-helm-table" class="divide-y divide-slate-100">
+            <tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Diagnostics</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Type</th>
+              <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Count</th>
+            </tr>
+          </thead>
+          <tbody id="m-diagnostics-table" class="divide-y divide-slate-100">
+            <tr><td colspan="2" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test Duration -->
+  <div>
+    <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Test Duration by Preset</h2>
+    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Preset</th>
+            <th class="text-left px-4 py-2 text-xs font-semibold text-slate-500">Persona</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Runs</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Avg Duration</th>
+            <th class="text-right px-4 py-2 text-xs font-semibold text-slate-500">Total Time</th>
+          </tr>
+        </thead>
+        <tbody id="m-testdur-table" class="divide-y divide-slate-100">
+          <tr><td colspan="5" class="px-4 py-3 text-slate-400 text-xs text-center">No test runs recorded</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- Pod Log Modal -->
@@ -514,6 +684,187 @@ setInterval(() => { fetchStats(); fetchActivity() }, 2000)
 // Allow ?tab=transactions etc on load
 const initTab = params.get('tab')
 if (initTab === 'pods' || initTab === 'transactions') setTab(initTab)
+
+// ─── Analytics ───────────────────────────────────────────────────────────────
+const METRICS_BASE = API_BASE.replace(/\/api\/simulation$/, '')
+
+function parsePrometheusText(text) {
+  const metrics = {}
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const m = t.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([\-\d.+eEinfINF]+)/)
+    if (!m) continue
+    const [, name, labelsStr, valueStr] = m
+    const value = parseFloat(valueStr)
+    if (!metrics[name]) metrics[name] = []
+    const labels = {}
+    if (labelsStr) for (const lm of labelsStr.matchAll(/(\w+)="([^"]*)"/g)) labels[lm[1]] = lm[2]
+    metrics[name].push({ labels, value })
+  }
+  return metrics
+}
+
+function getVal(metrics, name, filter = {}) {
+  const keys = Object.keys(filter)
+  return (metrics[name] ?? []).find(s => keys.every(k => s.labels[k] === filter[k]))?.value ?? 0
+}
+
+function sumVals(metrics, name, filter = {}) {
+  const keys = Object.keys(filter)
+  return (metrics[name] ?? [])
+    .filter(s => keys.every(k => s.labels[k] === filter[k]))
+    .reduce((a, s) => a + s.value, 0)
+}
+
+function uniqueLabels(metrics, name, key) {
+  return [...new Set((metrics[name] ?? []).map(s => s.labels[key]).filter(Boolean))]
+}
+
+function fmtNum(n) { return Number.isFinite(n) ? Math.round(n).toLocaleString() : '—' }
+function fmtMs(s)  { return Number.isFinite(s) && s > 0 ? `${(s * 1000).toFixed(0)}ms` : '—' }
+
+function renderAnalytics(metrics) {
+  // Pod gauges
+  setText('m-pods-active',    fmtNum(getVal(metrics, 'agent_pods_active')))
+  setText('m-pods-succeeded', fmtNum(getVal(metrics, 'agent_pods_succeeded')))
+  setText('m-pods-failed',    fmtNum(getVal(metrics, 'agent_pods_failed')))
+  setText('m-pods-pending',   fmtNum(getVal(metrics, 'agent_pods_pending')))
+
+  // Kueue
+  setText('m-kueue-active',   getVal(metrics, 'kueue_active') > 0 ? 'Active' : 'Inactive')
+  setText('m-kueue-pending',  fmtNum(getVal(metrics, 'kueue_pending_workloads')))
+  setText('m-kueue-admitted', fmtNum(getVal(metrics, 'kueue_admitted_workloads')))
+
+  // HTTP requests table
+  const endpoints = uniqueLabels(metrics, 'simulation_http_requests_total', 'endpoint')
+  const httpRows = endpoints.map(ep => {
+    const total    = sumVals(metrics, 'simulation_http_requests_total', { endpoint: ep })
+    const ok       = sumVals(metrics, 'simulation_http_requests_total', { endpoint: ep, status: '200' })
+    const errors   = ['400','404','422','500','502','503'].reduce(
+      (a, s) => a + sumVals(metrics, 'simulation_http_requests_total', { endpoint: ep, status: s }), 0)
+    const durCount = sumVals(metrics, 'simulation_http_request_duration_seconds_count', { endpoint: ep })
+    const durSum   = sumVals(metrics, 'simulation_http_request_duration_seconds_sum',   { endpoint: ep })
+    return { ep, total: Math.round(total), ok: Math.round(ok), errors: Math.round(errors),
+             avg: durCount > 0 ? durSum / durCount : NaN }
+  }).filter(r => r.total > 0).sort((a, b) => b.total - a.total)
+
+  document.getElementById('m-http-table').innerHTML = httpRows.length === 0
+    ? '<tr><td colspan="5" class="px-4 py-3 text-slate-400 text-xs text-center">No requests recorded yet</td></tr>'
+    : httpRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.ep)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-slate-600">${r.total.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-green-600">${r.ok.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs ${r.errors > 0 ? 'text-red-500' : 'text-slate-300'}">${r.errors.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-slate-500">${fmtMs(r.avg)}</td>
+      </tr>`).join('')
+
+  // Orchestration table
+  const orchRows = uniqueLabels(metrics, 'agent_orchestration_total', 'action').map(action => ({
+    action,
+    success: Math.round(sumVals(metrics, 'agent_orchestration_total', { action, result: 'success' })),
+    failure: Math.round(sumVals(metrics, 'agent_orchestration_total', { action, result: 'failure' })),
+  })).filter(r => r.success + r.failure > 0).sort((a, b) => (b.success + b.failure) - (a.success + a.failure))
+
+  document.getElementById('m-orch-table').innerHTML = orchRows.length === 0
+    ? '<tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">No orchestration events</td></tr>'
+    : orchRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.action)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-green-600">${r.success.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs ${r.failure > 0 ? 'text-red-500' : 'text-slate-300'}">${r.failure.toLocaleString()}</td>
+      </tr>`).join('')
+
+  // Cleanup table
+  const cleanupRows = uniqueLabels(metrics, 'cleanup_operations_total', 'resource_type').map(rt => ({
+    rt,
+    ok:   Math.round(sumVals(metrics, 'cleanup_operations_total', { resource_type: rt, result: 'success' })),
+    fail: Math.round(sumVals(metrics, 'cleanup_operations_total', { resource_type: rt, result: 'failure' })),
+  })).filter(r => r.ok + r.fail > 0)
+
+  document.getElementById('m-cleanup-table').innerHTML = cleanupRows.length === 0
+    ? '<tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>'
+    : cleanupRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.rt)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-green-600">${r.ok.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs ${r.fail > 0 ? 'text-red-500' : 'text-slate-300'}">${r.fail.toLocaleString()}</td>
+      </tr>`).join('')
+
+  // Helm table
+  const helmRows = uniqueLabels(metrics, 'helm_operations_total', 'operation').map(op => ({
+    op,
+    ok:   Math.round(sumVals(metrics, 'helm_operations_total', { operation: op, status: 'success' })),
+    fail: Math.round(sumVals(metrics, 'helm_operations_total', { operation: op, status: 'failure' })),
+  })).filter(r => r.ok + r.fail > 0)
+
+  document.getElementById('m-helm-table').innerHTML = helmRows.length === 0
+    ? '<tr><td colspan="3" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>'
+    : helmRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.op)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-green-600">${r.ok.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs ${r.fail > 0 ? 'text-red-500' : 'text-slate-300'}">${r.fail.toLocaleString()}</td>
+      </tr>`).join('')
+
+  // Diagnostics table
+  const diagRows = uniqueLabels(metrics, 'diagnostics_triggered_total', 'diagnostic_type').map(dt => ({
+    dt, count: Math.round(sumVals(metrics, 'diagnostics_triggered_total', { diagnostic_type: dt }))
+  })).filter(r => r.count > 0).sort((a, b) => b.count - a.count)
+
+  document.getElementById('m-diagnostics-table').innerHTML = diagRows.length === 0
+    ? '<tr><td colspan="2" class="px-4 py-3 text-slate-400 text-xs text-center">No data</td></tr>'
+    : diagRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.dt)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-slate-600">${r.count.toLocaleString()}</td>
+      </tr>`).join('')
+
+  // Test duration table
+  const presets  = uniqueLabels(metrics, 'agent_test_duration_seconds_count', 'preset')
+  const personas = uniqueLabels(metrics, 'agent_test_duration_seconds_count', 'persona')
+  const testRows = []
+  for (const preset of presets) for (const persona of personas) {
+    const count = Math.round(sumVals(metrics, 'agent_test_duration_seconds_count', { preset, persona }))
+    const sum   = sumVals(metrics, 'agent_test_duration_seconds_sum', { preset, persona })
+    if (count > 0) testRows.push({ preset, persona, count, avg: sum / count, total: sum })
+  }
+  testRows.sort((a, b) => b.count - a.count)
+
+  document.getElementById('m-testdur-table').innerHTML = testRows.length === 0
+    ? '<tr><td colspan="5" class="px-4 py-3 text-slate-400 text-xs text-center">No test runs recorded</td></tr>'
+    : testRows.map(r => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-2 font-mono text-xs text-slate-700">${escHtml(r.preset)}</td>
+        <td class="px-4 py-2 font-mono text-xs text-slate-600">${escHtml(r.persona)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-slate-600">${r.count.toLocaleString()}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-sky-600">${fmtTime(r.avg)}</td>
+        <td class="px-4 py-2 text-right font-mono text-xs text-slate-400">${fmtTime(r.total)}</td>
+      </tr>`).join('')
+
+  setText('metrics-updated', `Updated ${new Date().toLocaleTimeString()}`)
+}
+
+let currentView = 'dashboard'
+function switchView(view) {
+  currentView = view
+  document.getElementById('view-dashboard').classList.toggle('hidden', view !== 'dashboard')
+  document.getElementById('view-analytics').classList.toggle('hidden', view !== 'analytics')
+  const active   = 'text-sm px-3 py-1 rounded font-medium bg-white/20 text-white'
+  const inactive = 'text-sm px-3 py-1 rounded font-medium text-emerald-200 hover:bg-white/10'
+  document.getElementById('nav-dashboard').className = view === 'dashboard' ? active : inactive
+  document.getElementById('nav-analytics').className = view === 'analytics'  ? active : inactive
+  if (view === 'analytics') fetchMetrics()
+}
+
+async function fetchMetrics() {
+  const url = `${METRICS_BASE}/metrics`
+  setText('metrics-source', url)
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    renderAnalytics(parsePrometheusText(await res.text()))
+  } catch (e) {
+    setText('metrics-updated', `Error: ${e.message}`)
+  }
+}
+
+setInterval(() => { if (currentView === 'analytics') fetchMetrics() }, 5000)
 </script>
 </body>
 </html>

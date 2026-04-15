@@ -1219,6 +1219,11 @@ def dashboard():
     """Serve the simulation dashboard."""
     return send_from_directory(_DASHBOARD_DIR, 'index.html')
 
+@app.route('/metrics')
+def prometheus_metrics():
+    """Prometheus metrics endpoint."""
+    return Response(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
+
 # --- API Key Authentication ---
 SIMULATION_API_KEY = os.environ.get('SIMULATION_API_KEY', 'dev-key-change-in-production')
 
