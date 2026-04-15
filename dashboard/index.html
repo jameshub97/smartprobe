@@ -672,7 +672,7 @@ async function fetchStats() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     updateStats(data)
-    setStatus('inline-block w-2 h-2 rounded-full bg-indigo-500', 'live')
+    setStatus('inline-block w-2 h-2 rounded-full bg-emerald-400', 'live')
   } catch {
     setStatus('inline-block w-2 h-2 rounded-full bg-amber-400', 'unreachable')
   }
