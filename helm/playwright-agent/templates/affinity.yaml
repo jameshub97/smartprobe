@@ -1,0 +1,11 @@
+{{- if .Values.affinity }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "playwright-agent.fullname" . }}-affinity
+  annotations:
+    "helm.sh/hook": test-success
+spec:
+  affinity:
+    {{- toYaml .Values.affinity | nindent 4 }}
+{{- end }}

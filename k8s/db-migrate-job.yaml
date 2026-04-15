@@ -1,0 +1,15 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: backend:latest
+        imagePullPolicy: Never
+        command: ["/app/efbundle"]
+        args: ["--connection", "Host=postgres-service;Database=AssetManagerDb;Username=postgres;Password=postgres"]

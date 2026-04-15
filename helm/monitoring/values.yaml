@@ -1,0 +1,165 @@
+# kube-prometheus-stack custom values for the asset-manager platform.
+#
+# Install with:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install monitoring prometheus-community/kube-prometheus-stack \
+#     -f helm/monitoring/values.yaml --namespace monitoring --create-namespace
+
+# ---------- Prometheus ----------
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    # Scrape every 15s for simulation-level granularity
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    # Pick up ServiceMonitors from ALL namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+# ---------- Grafana ----------
+grafana:
+  enabled: true
+  adminPassword: admin  # Change in production
+  service:
+    type: ClusterIP
+    port: 3000
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'asset-manager'
+          orgId: 1
+          folder: 'Asset Manager'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/asset-manager
+  dashboards:
+    asset-manager:
+      simulation-overview:
+        json: |
+          {
+            "annotations": { "list": [] },
+            "editable": true,
+            "fiscalYearStartMonth": 0,
+            "graphTooltip": 0,
+            "id": null,
+            "links": [],
+            "panels": [
+              {
+                "title": "Active Agent Pods",
+                "type": "stat",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "agent_pods_active", "legendFormat": "Active" }],
+                "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+              },
+              {
+                "title": "Succeeded Agent Pods",
+                "type": "stat",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "agent_pods_succeeded", "legendFormat": "Succeeded" }],
+                "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+              },
+              {
+                "title": "Failed Agent Pods",
+                "type": "stat",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "agent_pods_failed", "legendFormat": "Failed" }],
+                "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }
+              },
+              {
+                "title": "Pending Agent Pods",
+                "type": "stat",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "agent_pods_pending", "legendFormat": "Pending" }],
+                "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }
+              },
+              {
+                "title": "HTTP Request Rate",
+                "type": "timeseries",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "rate(simulation_http_requests_total[5m])", "legendFormat": "{{method}} {{endpoint}}" }],
+                "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+              },
+              {
+                "title": "HTTP Request Latency (p95)",
+                "type": "timeseries",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "histogram_quantile(0.95, rate(simulation_http_request_duration_seconds_bucket[5m]))", "legendFormat": "{{endpoint}}" }],
+                "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 }
+              },
+              {
+                "title": "Agent Orchestration Events",
+                "type": "timeseries",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "rate(agent_orchestration_total[5m])", "legendFormat": "{{action}} ({{result}})" }],
+                "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+              },
+              {
+                "title": "Diagnostics Triggered",
+                "type": "timeseries",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "rate(diagnostics_triggered_total[5m])", "legendFormat": "{{diagnostic_type}}" }],
+                "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }
+              },
+              {
+                "title": "Cleanup Operations",
+                "type": "timeseries",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "rate(cleanup_operations_total[5m])", "legendFormat": "{{resource_type}}" }],
+                "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 }
+              },
+              {
+                "title": "Agent Test Duration Distribution",
+                "type": "heatmap",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "targets": [{ "expr": "rate(agent_test_duration_seconds_bucket[5m])", "legendFormat": "{{le}}" }],
+                "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 }
+              }
+            ],
+            "schemaVersion": 39,
+            "tags": ["asset-manager", "simulation"],
+            "templating": { "list": [] },
+            "time": { "from": "now-1h", "to": "now" },
+            "title": "Simulation Service Overview",
+            "uid": "sim-overview"
+          }
+
+# ---------- Alertmanager ----------
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+# ---------- Default rule toggles ----------
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: false          # not needed for managed K8s
+    kubeProxy: false     # often not exposed
+    kubeScheduler: false # often not exposed
+
+# ---------- Node Exporter ----------
+nodeExporter:
+  enabled: true
+
+# ---------- kube-state-metrics ----------
+kubeStateMetrics:
+  enabled: true

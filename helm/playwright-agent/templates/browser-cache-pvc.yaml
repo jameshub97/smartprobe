@@ -1,0 +1,15 @@
+{{- if and .Values.sharedCache .Values.sharedCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: playwright-cache
+spec:
+  accessModes:
+    - {{ .Values.sharedCache.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.sharedCache.size | default "2Gi" }}
+  {{- if .Values.sharedCache.storageClassName }}
+  storageClassName: {{ .Values.sharedCache.storageClassName }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,63 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: simulation-service-alerts
+  namespace: monitoring
+  labels:
+    app: simulation-service
+    release: monitoring
+spec:
+  groups:
+    - name: simulation-service.rules
+      rules:
+        # Alert when no agent pods have succeeded in the last 10 minutes during an active run
+        - alert: AgentPodsStalled
+          expr: agent_pods_active > 0 and rate(agent_pods_succeeded[10m]) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Agent pods are active but none succeeding"
+            description: "There are {{ $value }} active agent pods but the success rate has been zero for 10 minutes."
+
+        # Alert on high agent failure rate
+        - alert: AgentHighFailureRate
+          expr: |
+            (agent_pods_failed / (agent_pods_succeeded + agent_pods_failed)) > 0.2
+            and (agent_pods_succeeded + agent_pods_failed) > 5
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Agent pod failure rate exceeds 20%"
+            description: "Failed: {{ $value | humanizePercentage }} of completed agent pods."
+
+        # Alert when simulation service request latency is high
+        - alert: SimulationServiceHighLatency
+          expr: histogram_quantile(0.95, rate(simulation_http_request_duration_seconds_bucket[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Simulation service p95 latency above 2s"
+            description: "p95 latency is {{ $value }}s."
+
+        # Alert when simulation service is down (no requests for 5 minutes)
+        - alert: SimulationServiceDown
+          expr: absent(up{job="simulation-service"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Simulation service is unreachable"
+            description: "Prometheus cannot reach the simulation service scrape target."
+
+        # Alert when too many cleanup operations are happening
+        - alert: ExcessiveCleanupOperations
+          expr: rate(cleanup_operations_total[15m]) > 0.5
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High rate of cleanup operations"
+            description: "Cleanup operations are happening at {{ $value }}/sec over 15 minutes."

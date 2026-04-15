@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: playwright-agent
+  labels:
+    release: {{ .Release.Name }}
+spec:
+  serviceName: playwright-agent
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: playwright-agent
+  template:
+    metadata:
+      labels:
+        app: playwright-agent
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: playwright-agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.commandOverride }}
+          command: ["sh", "-c"]
+          args:
+            - {{ .Values.commandOverride | quote }}
+          {{- else }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              export POD_ORDINAL=$(echo "$HOSTNAME" | awk -F'-' '{print $NF}')
+              export PLAYWRIGHT_SHARD_INDEX=$((POD_ORDINAL + 1))
+              echo "Running shard ${PLAYWRIGHT_SHARD_INDEX}/{{ .Values.shardTotal }}"
+              npx playwright test --workers={{ .Values.workersPerPod }} --shard=${PLAYWRIGHT_SHARD_INDEX}/{{ .Values.shardTotal }}
+          {{- end }}
+          env:
+            - name: SHARD_TOTAL
+              value: "{{ .Values.shardTotal }}"
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_PERSONA
+              value: "{{ .Values.persona | default "default" }}"
+            - name: BACKEND_API
+              value: "{{ .Values.backendApi | default "http://backend:5001/api/simulation/results" }}"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      restartPolicy: Always
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates: []

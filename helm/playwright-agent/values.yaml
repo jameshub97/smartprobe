@@ -1,0 +1,57 @@
+replicaCount: 1
+image:
+  repository: mcr.microsoft.com/playwright
+  tag: v1.40.0-focal
+  pullPolicy: IfNotPresent
+
+persona: default
+targetUrl: http://host.docker.internal:5173
+backendApi: http://host.docker.internal:5001/api/simulation/results
+simApi: http://host.docker.internal:5002/api/simulation
+networkLatency: "0"
+packetLoss: "0"
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "250m"
+  limits:
+    memory: "1Gi"
+    cpu: "500m"
+
+# Job-specific settings
+completions: 100
+parallelism: 20
+shardTotal: 10
+workersPerPod: 10
+backoffLimit: 2
+ttlSecondsAfterFinished: 60
+commandOverride: ""
+
+sharedCache:
+  enabled: false
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  storageClassName: ""
+
+persistence:
+  enabled: false
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  storageClassName: ""
+
+resourceQuota:
+  enabled: false
+  hard: {}
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+kueue:
+  enabled: false
+  queueName: simulation-queue

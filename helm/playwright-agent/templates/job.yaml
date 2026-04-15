@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-agent
+  labels:
+    app: playwright-agent
+    release: {{ .Release.Name }}
+    {{- if .Values.kueue.enabled }}
+    kueue.x-k8s.io/queue-name: {{ .Values.kueue.queueName }}
+    {{- end }}
+spec:
+  {{- if .Values.kueue.enabled }}
+  suspend: true
+  {{- end }}
+  parallelism: {{ .Values.parallelism }}
+  completions: {{ .Values.completions }}
+  backoffLimit: {{ .Values.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: playwright-agent
+        release: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: playwright-agent
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.commandOverride }}
+        command: ["sh", "-c"]
+        args:
+        - {{ .Values.commandOverride | quote }}
+        {{- end }}
+        env:
+        - name: TARGET_URL
+          value: "{{ .Values.targetUrl }}"
+        - name: AGENT_PERSONA
+          value: "{{ .Values.persona }}"
+        - name: NETWORK_LATENCY
+          value: "{{ .Values.networkLatency }}"
+        - name: PACKET_LOSS
+          value: "{{ .Values.packetLoss }}"
+        - name: BACKEND_API
+          value: "{{ .Values.backendApi }}"
+        - name: SIM_API
+          value: "{{ .Values.simApi }}"
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}

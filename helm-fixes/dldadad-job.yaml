@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dldadad-job
+  labels:
+    app: playwright-agent
+    release: dldadad
+spec:
+  completionMode: Indexed
+  completions: 500
+  parallelism: 50
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 60
+  template:
+    metadata:
+      labels:
+        app: playwright-agent
+        release: dldadad
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: playwright-agent
+        image: "mcr.microsoft.com/playwright:v1.40.0-focal"
+        command: ["sh", "-c"]
+        args:
+          - |
+            SHARD_NUM=$((JOB_COMPLETION_INDEX + 1))
+            npx playwright test --workers=1 --shard=$SHARD_NUM/10
+        env:
+        - name: AGENT_PERSONA
+          value: "browser"
+        - name: BACKEND_API
+          value: "http://backend:5001/api/simulation/results"

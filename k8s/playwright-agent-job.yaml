@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: playwright-agent
+spec:
+  parallelism: 12   # safe max for 10-vCPU Mac; raise to 35 if reducing cpu request to 200m
+  completions: 50
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: playwright-agent
+        image: playwright-agent:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: TARGET_URL
+          value: "http://frontend-service"
+        - name: AGENT_PERSONA
+          value: "browser"
+        - name: NETWORK_LATENCY
+          value: "50"
+        - name: PACKET_LOSS
+          value: "2"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"

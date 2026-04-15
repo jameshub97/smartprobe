@@ -1,0 +1,11 @@
+{{- if and .Values.resourceQuota .Values.resourceQuota.enabled .Values.resourceQuota.hard }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "playwright-agent.fullname" . }}-resources
+  labels:
+    {{- include "playwright-agent.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
+{{- end }}

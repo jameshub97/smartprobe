@@ -1,0 +1,123 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: AssetManagerDb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - asset-net
+
+  backend1:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:-Host=postgres;Port=5432;Database=AssetManagerDb;Username=postgres;Password=postgres}
+      Jwt__Issuer: ${Jwt__Issuer:-asset-manager}
+      Jwt__Audience: ${Jwt__Audience:-asset-manager-users}
+      Jwt__Secret: ${Jwt__Secret:-development-only-super-secret-jwt-key-change-me}
+      Cors__AllowedOrigins__0: ${Cors__AllowedOrigins__0:-http://localhost:5173}
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    networks:
+      - asset-net
+
+  backend2:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:-Host=postgres;Port=5432;Database=AssetManagerDb;Username=postgres;Password=postgres}
+      Jwt__Issuer: ${Jwt__Issuer:-asset-manager}
+      Jwt__Audience: ${Jwt__Audience:-asset-manager-users}
+      Jwt__Secret: ${Jwt__Secret:-development-only-super-secret-jwt-key-change-me}
+      Cors__AllowedOrigins__0: ${Cors__AllowedOrigins__0:-http://localhost:5173}
+    networks:
+      - asset-net
+
+  simulation:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulation
+    environment:
+      SIMULATION_API_KEY: ${SIMULATION_API_KEY:-dev-key-change-in-production}
+      FLASK_ENV: ${FLASK_ENV:-development}
+    ports:
+      - "5002:5002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - asset-net
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend1:
+        condition: service_healthy
+      backend2:
+        condition: service_started
+      simulation:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - asset-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080/api}
+    depends_on:
+      nginx:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+    networks:
+      - asset-net
+
+networks:
+  asset-net:
+    driver: bridge
+
+volumes:
+  pgdata:

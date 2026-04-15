@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: results-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: results-api
+  template:
+    metadata:
+      labels:
+        app: results-api
+    spec:
+      containers:
+      - name: api
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          pip install flask
+          cat > /app.py << 'PYTHON'
+          from flask import Flask, request, jsonify
+          import json
+          import os
+          
+          app = Flask(__name__)
+          results = []
+          
+          @app.route('/results', methods=['POST'])
+          def collect():
+              data = request.json
+              results.append(data)
+              print(f"📊 Received: {data}")
+              return jsonify({"status": "ok"})
+          
+          @app.route('/results', methods=['GET'])
+          def get_results():
+              return jsonify(results)
+          
+          @app.route('/summary', methods=['GET'])
+          def summary():
+              return jsonify({
+                  "total": len(results),
+                  "success": sum(1 for r in results if r.get("status") == "completed"),
+                  "errors": sum(1 for r in results if r.get("status") == "error")
+              })
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+          PYTHON
+          python /app.py
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: results-api
+spec:
+  selector:
+    app: results-api
+  ports:
+  - port: 5000
+    targetPort: 5000
