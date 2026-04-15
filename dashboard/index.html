@@ -125,10 +125,10 @@
         <span id="log-summary" class="text-xs text-slate-400"></span>
         <button onclick="toggleExpand()"
           class="text-xs text-slate-500 hover:text-emerald-600 border border-slate-200 rounded px-2 py-0.5 transition-colors"
-          id="expand-btn">▼ Expand</button>
+          id="expand-btn">▲ Compact</button>
       </div>
     </div>
-    <div id="log-container" class="log-scroll px-5 py-3 font-mono text-xs leading-relaxed">
+    <div id="log-container" class="log-scroll expanded px-5 py-3 font-mono text-xs leading-relaxed">
       <div class="text-slate-400 py-2">Waiting for agents…</div>
     </div>
   </div>
@@ -164,7 +164,7 @@ document.getElementById('api-label').textContent = API_BASE
 let activityLog = []
 let activitySummary = { sleeping: 0, pending: 0, running: 0 }
 let currentTab = 'all'
-let expanded = false
+let expanded = true
 let pollingActive = true
 
 const POD_TYPES = new Set(['started','completed','pending','failed','registered','logged_in','agent_done'])
