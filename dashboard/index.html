@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smartprobe Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .log-scroll { max-height: 240px; overflow-y: auto; }
+    .log-scroll.expanded { max-height: 600px; }
+    .tab-active-all { color: #334155; background: #f1f5f9; }
+    .tab-active-pods { color: #065f46; background: #ecfdf5; }
+    .tab-active-tx { color: #5b21b6; background: #f5f3ff; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<div class="bg-emerald-700 text-white px-6 py-4 flex items-center justify-between shadow-sm">
+  <div class="flex items-center gap-3">
+    <span class="text-xl font-bold tracking-tight">smartprobe</span>
+    <span class="text-emerald-300 text-sm font-mono">/ dashboard</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <span id="api-label" class="text-xs font-mono text-emerald-300"></span>
+    <span id="status-dot" class="inline-block w-2 h-2 rounded-full bg-slate-400"></span>
+    <span id="status-text" class="text-xs text-emerald-200">connecting…</span>
+  </div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 py-6 space-y-4">
+
+  <!-- Status Overview -->
+  <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-3">
+    <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
+      <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider font-sans mr-1">Status</span>
+      <span><span class="text-slate-500">Total</span> <span id="s-total" class="font-bold text-emerald-700">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Pods</span> <span id="s-pods" class="font-bold text-sky-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Success</span> <span id="s-success" class="font-bold text-green-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Pending</span> <span id="s-pending" class="font-bold text-amber-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Errors</span> <span id="s-errors" class="font-bold text-red-600">—</span></span>
+      <!-- Kueue extras injected by JS -->
+      <span id="kueue-section" class="hidden contents">
+        <span class="text-slate-200">|</span>
+        <span><span class="text-slate-500">Admitted</span> <span id="s-admitted" class="font-bold text-violet-600">—</span></span>
+        <span class="text-slate-200">|</span>
+        <span><span class="text-slate-500">Queued</span> <span id="s-queued" class="font-bold text-indigo-600">—</span></span>
+        <span class="text-slate-200">|</span>
+        <span><span class="text-slate-500">Drain</span> <span id="s-drain" class="font-bold text-fuchsia-600">—</span></span>
+        <span id="cpu-section" class="hidden contents">
+          <span class="text-slate-200">|</span>
+          <span><span class="text-slate-500">CPU</span> <span id="s-cpu" class="font-bold text-teal-600">—</span></span>
+        </span>
+        <span id="mem-section" class="hidden contents">
+          <span class="text-slate-200">|</span>
+          <span><span class="text-slate-500">Mem</span> <span id="s-mem" class="font-bold text-cyan-600">—</span></span>
+        </span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Performance Metrics -->
+  <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-3">
+    <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
+      <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider font-sans mr-1">Perf</span>
+      <span><span class="text-slate-500">Throughput</span> <span id="p-rate" class="font-bold text-orange-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Complete</span> <span id="p-pct" class="font-bold text-lime-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">ETA</span> <span id="p-eta" class="font-bold text-sky-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Avg</span> <span id="p-avg" class="font-bold text-slate-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Activation</span> <span id="p-activation" class="font-bold text-amber-600">—</span></span>
+    </div>
+  </div>
+
+  <!-- E2E Coordinator Metrics -->
+  <div id="e2e-section" class="hidden bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-3">
+    <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
+      <span class="text-xs font-semibold text-violet-400 uppercase tracking-wider font-sans mr-1">E2E</span>
+      <span><span class="text-slate-500">Agents</span> <span id="c-agents" class="font-bold text-violet-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Sellers</span> <span id="c-sellers" class="font-bold text-orange-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Buyers</span> <span id="c-buyers" class="font-bold text-sky-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Observers</span> <span id="c-observers" class="font-bold text-slate-500">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Pool</span> <span id="c-pool" class="font-bold text-emerald-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Txns</span> <span id="c-txns" class="font-bold text-green-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Conflicts</span> <span id="c-conflicts" class="font-bold text-red-600">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-500">Failed</span> <span id="c-failed" class="font-bold text-red-500">—</span></span>
+    </div>
+  </div>
+
+  <!-- Activity Log -->
+  <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+    <div class="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <button id="tab-all" onclick="setTab('all')"
+          class="text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-all">
+          All<span id="tab-all-count" class="ml-1 text-xs font-normal text-slate-400"></span>
+        </button>
+        <button id="tab-pods" onclick="setTab('pods')"
+          class="text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600">
+          Pods<span id="tab-pods-count" class="ml-1 text-xs font-normal text-emerald-500"></span>
+        </button>
+        <button id="tab-tx" onclick="setTab('transactions')"
+          class="text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600">
+          Transactions<span id="tab-tx-count" class="ml-1 text-xs font-normal text-violet-400"></span>
+        </button>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="log-summary" class="text-xs text-slate-400"></span>
+        <button onclick="toggleExpand()"
+          class="text-xs text-slate-500 hover:text-emerald-600 border border-slate-200 rounded px-2 py-0.5 transition-colors"
+          id="expand-btn">▼ Expand</button>
+      </div>
+    </div>
+    <div id="log-container" class="log-scroll px-5 py-3 font-mono text-xs leading-relaxed">
+      <div class="text-slate-400 py-2">Waiting for agents…</div>
+    </div>
+  </div>
+
+  <!-- Agent Grid -->
+  <div id="agent-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4"></div>
+
+</div>
+
+<!-- Pod Log Modal -->
+<div id="pod-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+     onclick="if(event.target===this) closePodModal()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
+      <span id="modal-pod-name" class="font-mono text-sm font-semibold text-slate-700"></span>
+      <button onclick="closePodModal()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 bg-slate-950 rounded-b-xl">
+      <div id="modal-loading" class="text-slate-400 text-sm font-mono">Loading logs…</div>
+      <pre id="modal-logs" class="hidden text-xs font-mono text-slate-200 leading-relaxed"></pre>
+      <div id="modal-error" class="hidden text-red-400 text-sm font-mono p-2"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Config ────────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search)
+const API_BASE = (params.get('api') || 'http://localhost:5002').replace(/\/$/, '') + '/api/simulation'
+document.getElementById('api-label').textContent = API_BASE
+
+// ─── State ──────────────────────────────────────────────────────────────────
+let activityLog = []
+let activitySummary = { sleeping: 0, pending: 0, running: 0 }
+let currentTab = 'all'
+let expanded = false
+let pollingActive = true
+
+const POD_TYPES = new Set(['started','completed','pending','failed','registered','logged_in','agent_done'])
+const TX_TYPES  = new Set(['asset_created','transfer_started','transfer_completed','transfer_failed','conflict_detected','consistency_check'])
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+function fmtTime(s) {
+  if (s < 60)   return `${Math.round(s)}s`
+  if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60)}s`
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`
+}
+
+function fmtDrain(secs, active) {
+  if (secs <= 0 || !active) return '0s'
+  return fmtTime(secs)
+}
+
+function eventColor(type) {
+  const map = {
+    completed:'text-green-600', agent_done:'text-green-600', transfer_completed:'text-green-600',
+    started:'text-sky-600', pending:'text-amber-500', failed:'text-red-600',
+    transfer_failed:'text-red-600', registered:'text-indigo-500', logged_in:'text-slate-500',
+    transfer_started:'text-violet-600', asset_created:'text-emerald-500',
+    conflict_detected:'text-amber-600', consistency_check:'text-cyan-600',
+  }
+  return map[type] || 'text-slate-400'
+}
+
+function formatLabel(e) {
+  switch (e.type) {
+    case 'started':             return `${e.pod} started`
+    case 'completed':           return `${e.pod} completed${e.details ? ` (${e.details})` : ''}`
+    case 'pending':             return `${e.pod} pending${e.details ? ` (${e.details})` : ''}`
+    case 'failed':              return `${e.pod} failed${e.details ? ` (${e.details})` : ''}`
+    case 'registered':          return `${e.pod} registered${e.details ? ` as ${e.details}` : ''}`
+    case 'logged_in':           return `${e.pod} logged in${e.details ? ` (${e.details})` : ''}`
+    case 'agent_done':          return `${e.pod} ✓ done${e.details ? ` — ${e.details}` : ''}`
+    case 'asset_created':       return `${e.pod} created asset${e.details ? ` — ${e.details}` : ''}`
+    case 'transfer_started':    return `${e.pod} claiming${e.details ? ` ${e.details}` : ''}`
+    case 'transfer_completed':  return `${e.pod} transfer complete${e.details ? ` — ${e.details}` : ''}`
+    case 'transfer_failed':     return `${e.pod} transfer failed${e.details ? ` — ${e.details}` : ''}`
+    case 'conflict_detected':   return `${e.pod} CONFLICT${e.details ? ` — ${e.details}` : ''}`
+    case 'consistency_check':   return `${e.pod} verified${e.details ? ` — ${e.details}` : ''}`
+    default:                    return `${e.pod} ${e.type}${e.details ? ` (${e.details})` : ''}`
+  }
+}
+
+function canViewLogs(type) {
+  return type === 'completed' || type === 'agent_done'
+}
+
+function statusClass(status) {
+  const map = {
+    running:   'bg-emerald-100 text-emerald-700 border-emerald-200',
+    completed: 'bg-green-100 text-green-700 border-green-200',
+    pending:   'bg-amber-100 text-amber-700 border-amber-200',
+    error:     'bg-red-100 text-red-700 border-red-200',
+  }
+  return (map[status] || 'bg-slate-100 text-slate-700 border-slate-200') + ' border'
+}
+
+function setVisible(id, visible) {
+  const el = document.getElementById(id)
+  if (!el) return
+  el.classList.toggle('hidden', !visible)
+  el.classList.toggle('contents', visible)
+}
+
+// ─── UI updates ─────────────────────────────────────────────────────────────
+function setText(id, val) {
+  const el = document.getElementById(id)
+  if (el) el.textContent = val
+}
+
+function updateStats(data) {
+  setText('s-total',   data.total ?? 0)
+  setText('s-pods',    data.activePods ?? 0)
+  setText('s-success', data.success ?? 0)
+  setText('s-pending', data.pending ?? 0)
+  setText('s-errors',  data.errors ?? 0)
+
+  const kueue = data.kueue
+  if (kueue?.active) {
+    setVisible('kueue-section', true)
+    setText('s-admitted', kueue.admitted_workloads ?? 0)
+    setText('s-queued',   kueue.pending_workloads ?? 0)
+    setText('s-drain',    fmtDrain(kueue.estimated_drain_seconds ?? 0, true))
+
+    const quotas = kueue.cluster_queue?.quotas ?? {}
+    setVisible('cpu-section', !!quotas.cpu)
+    if (quotas.cpu) setText('s-cpu', quotas.cpu)
+    setVisible('mem-section', !!quotas.memory)
+    if (quotas.memory) setText('s-mem', quotas.memory)
+  } else {
+    setVisible('kueue-section', false)
+  }
+
+  // Perf
+  const t = data.throughput
+  if (t && t.completed) {
+    setText('p-rate', t.agentsPerSecond >= 1 ? `${t.agentsPerSecond}/s` : `${t.agentsPerMinute}/m`)
+    setText('p-pct',  `${t.percentComplete}%`)
+    setText('p-eta',  t.etaSeconds > 0 ? fmtTime(t.etaSeconds) : 'done')
+    setText('p-avg',  t.avgDuration != null ? `${t.avgDuration}s` : '—')
+  } else {
+    ['p-rate','p-pct','p-eta','p-avg'].forEach(id => setText(id, '—'))
+  }
+
+  const a = data.activation
+  if (a && a.count > 0 && Number.isFinite(a.avg)) {
+    const fmt = s => !Number.isFinite(s) ? '—' : s < 60 ? `${s}s` : `${Math.floor(s/60)}m${Math.round(s%60)}s`
+    document.getElementById('p-activation').title = `p95: ${fmt(a.p95)} (${a.count} pods)`
+    setText('p-activation', fmt(a.avg))
+  } else {
+    setText('p-activation', '—')
+  }
+
+  // Coordinator
+  const coord = data.coordinator
+  const section = document.getElementById('e2e-section')
+  if (coord && coord.agents > 0) {
+    section.classList.remove('hidden')
+    setText('c-agents',    coord.agents)
+    setText('c-sellers',   coord.roles?.sellers ?? 0)
+    setText('c-buyers',    coord.roles?.buyers ?? 0)
+    setText('c-observers', coord.roles?.observers ?? 0)
+    setText('c-pool',      coord.pool_size ?? 0)
+    const tx = coord.transactions ?? {}
+    setText('c-txns',      `${tx.completed ?? 0}/${tx.total ?? 0}`)
+    setText('c-conflicts', tx.conflicts ?? 0)
+    setText('c-failed',    tx.failed ?? 0)
+  } else {
+    section.classList.add('hidden')
+  }
+
+  // Agent grid
+  updateAgentGrid(data.results ?? [])
+}
+
+function updateAgentGrid(results) {
+  const sorted = [...results]
+    .filter(a => a && typeof a.name === 'string' && a.name)
+    .sort((a, b) => {
+      if (a.status === 'Running' && b.status !== 'Running') return -1
+      if (a.status !== 'Running' && b.status === 'Running') return 1
+      if (a.created && b.created) return new Date(b.created) - new Date(a.created)
+      return (b.name || '').localeCompare(a.name || '')
+    })
+
+  const grid = document.getElementById('agent-grid')
+  grid.innerHTML = sorted.map(agent => `
+    <div class="border border-emerald-300/30 rounded-xl bg-gradient-to-b from-white/95 to-emerald-50/90 p-4 flex flex-col gap-2 shadow-sm">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-bold text-emerald-700 text-sm">🤖 ${escHtml(agent.name)}</span>
+        <span class="px-2 py-1 rounded text-xs font-semibold capitalize ${statusClass(agent.status?.toLowerCase())}">
+          ${escHtml(agent.status || '')}
+        </span>
+      </div>
+      ${agent.currentAction ? `<div class="text-gray-700 text-sm"><span class="font-semibold">🎯</span> ${escHtml(agent.currentAction)}</div>` : ''}
+      ${agent.recentLogs?.length ? `
+        <div class="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-gray-600 max-h-20 overflow-y-auto font-mono">
+          ${agent.recentLogs.map(l => `<div>${escHtml(l.message || l)}</div>`).join('')}
+        </div>` : ''}
+      ${agent.screenshot ? `<img src="${escHtml(agent.screenshot)}" class="mt-2 rounded border border-slate-200 object-cover w-full h-28" />` : ''}
+    </div>
+  `).join('')
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+// ─── Activity log UI ─────────────────────────────────────────────────────────
+function setTab(tab) {
+  currentTab = tab
+  const tabs = { all: 'tab-all', pods: 'tab-pods', transactions: 'tab-tx' }
+  Object.keys(tabs).forEach(t => {
+    const el = document.getElementById(tabs[t])
+    el.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600'
+  })
+  const active = document.getElementById(tabs[tab])
+  if (tab === 'all')          active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-all'
+  else if (tab === 'pods')    active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-pods'
+  else                        active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-tx'
+  renderLog()
+}
+
+function toggleExpand() {
+  expanded = !expanded
+  document.getElementById('log-container').classList.toggle('expanded', expanded)
+  document.getElementById('expand-btn').textContent = expanded ? '▲ Compact' : '▼ Expand'
+}
+
+function renderLog() {
+  const podLog = activityLog.filter(e => POD_TYPES.has(e.type))
+  const txLog  = activityLog.filter(e => TX_TYPES.has(e.type))
+
+  setText('tab-all-count',   activityLog.length ? `(${activityLog.length})` : '')
+  setText('tab-pods-count',  podLog.length ? `(${podLog.length})` : '')
+  setText('tab-tx-count',    txLog.length ? `(${txLog.length})` : '')
+
+  // Summary line
+  let summary = ''
+  if (currentTab === 'all' || currentTab === 'pods') {
+    const s = activitySummary
+    summary = `${s.sleeping} completed · ${s.running} running`
+    if (currentTab === 'all') {
+      let completed = 0, conflicts = 0
+      for (const e of txLog) {
+        if (e.type === 'transfer_completed') completed++
+        else if (e.type === 'conflict_detected') conflicts++
+      }
+      summary += ` · ${completed} transferred · ${conflicts} conflicts`
+    } else {
+      summary += ` · ${s.pending} pending`
+    }
+  } else {
+    let completed = 0, started = 0, failed = 0, conflicts = 0
+    for (const e of txLog) {
+      if (e.type === 'transfer_completed') completed++
+      else if (e.type === 'transfer_started') started++
+      else if (e.type === 'transfer_failed') failed++
+      else if (e.type === 'conflict_detected') conflicts++
+    }
+    summary = `${completed} completed · ${started} started · ${conflicts} conflicts · ${failed} failed`
+  }
+  setText('log-summary', summary)
+
+  const base = currentTab === 'pods' ? podLog : currentTab === 'transactions' ? txLog : activityLog
+  const display = [...base].reverse()
+
+  const container = document.getElementById('log-container')
+  if (display.length === 0) {
+    container.innerHTML = `<div class="text-slate-400 py-2">${
+      currentTab === 'transactions' ? 'No asset transactions — basic mode.' : 'No activity yet — waiting for agents…'
+    }</div>`
+    return
+  }
+
+  container.innerHTML = display.map(e => {
+    const logsBtn = canViewLogs(e.type)
+      ? ` <button onclick="viewPodLogs('${escHtml(e.pod_full || e.pod)}')" class="ml-2 text-xs text-slate-400 hover:text-sky-600 underline">logs</button>`
+      : ''
+    return `<div class="flex gap-3 py-0.5">
+      <span class="text-slate-400 shrink-0">${escHtml(e.timestamp)}</span>
+      <span class="${eventColor(e.type)}">${escHtml(formatLabel(e))}${logsBtn}</span>
+    </div>`
+  }).join('')
+}
+
+// ─── Pod log modal ───────────────────────────────────────────────────────────
+let activePod = null
+
+async function viewPodLogs(pod) {
+  activePod = pod
+  document.getElementById('modal-pod-name').textContent = pod
+  document.getElementById('pod-modal').classList.remove('hidden')
+  document.getElementById('modal-loading').classList.remove('hidden')
+  document.getElementById('modal-logs').classList.add('hidden')
+  document.getElementById('modal-error').classList.add('hidden')
+
+  try {
+    const res = await fetch(`${API_BASE}/pod-logs/${encodeURIComponent(pod)}?tail=300`)
+    if (activePod !== pod) return
+    if (res.ok) {
+      const data = await res.json()
+      document.getElementById('modal-loading').classList.add('hidden')
+      if (data.error) {
+        const el = document.getElementById('modal-error')
+        el.textContent = data.logs || 'kubectl reported an error but returned no output'
+        el.classList.remove('hidden')
+      } else {
+        const el = document.getElementById('modal-logs')
+        el.textContent = data.logs || '(no output)'
+        el.classList.remove('hidden')
+      }
+    } else {
+      let message
+      try { const b = await res.json(); message = b.error || b.message || b.detail } catch { message = '' }
+      if (!message) {
+        if (res.status === 404) message = 'Pod not found — it may have already been cleaned up'
+        else if (res.status === 400) message = 'Invalid pod name'
+        else message = `Unexpected error (HTTP ${res.status})`
+      }
+      document.getElementById('modal-loading').classList.add('hidden')
+      const el = document.getElementById('modal-error')
+      el.textContent = message
+      el.classList.remove('hidden')
+    }
+  } catch {
+    if (activePod === pod) {
+      document.getElementById('modal-loading').classList.add('hidden')
+      const el = document.getElementById('modal-error')
+      el.textContent = 'Could not reach the simulation service — is it running?'
+      el.classList.remove('hidden')
+    }
+  }
+}
+
+function closePodModal() {
+  activePod = null
+  document.getElementById('pod-modal').classList.add('hidden')
+}
+
+// ─── Polling ─────────────────────────────────────────────────────────────────
+const dot  = document.getElementById('status-dot')
+const stxt = document.getElementById('status-text')
+
+async function fetchStats() {
+  if (!pollingActive) return
+  try {
+    const res = await fetch(`${API_BASE}/summary`)
+    if (res.status === 404) {
+      pollingActive = false
+      stxt.textContent = 'summary endpoint not found'
+      dot.className = 'inline-block w-2 h-2 rounded-full bg-red-500'
+      return
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    updateStats(data)
+    dot.className = 'inline-block w-2 h-2 rounded-full bg-emerald-400'
+    stxt.textContent = 'live'
+  } catch {
+    dot.className = 'inline-block w-2 h-2 rounded-full bg-amber-400'
+    stxt.textContent = 'unreachable'
+  }
+}
+
+async function fetchActivity() {
+  if (!pollingActive) return
+  try {
+    const limit = expanded ? 200 : 100
+    const res = await fetch(`${API_BASE}/activity?limit=${limit}`)
+    if (!res.ok) return
+    const data = await res.json()
+    activityLog     = data.activity ?? []
+    activitySummary = data.summary ?? { sleeping: 0, pending: 0, running: 0 }
+    renderLog()
+  } catch { /* non-critical */ }
+}
+
+fetchStats()
+fetchActivity()
+setInterval(() => { fetchStats(); fetchActivity() }, 2000)
+
+// Allow ?tab=transactions etc on load
+const initTab = params.get('tab')
+if (initTab === 'pods' || initTab === 'transactions') setTab(initTab)
+</script>
+</body>
+</html>
