@@ -38,6 +38,15 @@
 
 <div id="view-dashboard" class="max-w-7xl mx-auto px-4 py-6 space-y-4">
 
+  <!-- API URL indicator -->
+  <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+    <span class="text-slate-300">↳</span>
+    <span class="text-slate-400">connected to</span>
+    <span id="api-label-dash" class="text-sky-600 font-semibold"></span>
+    <span id="status-dot-dash" class="inline-block w-2 h-2 rounded-full bg-slate-300 ml-1"></span>
+    <span id="status-text-dash" class="text-slate-400">connecting…</span>
+  </div>
+
   <!-- Status Overview -->
   <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-3">
     <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
@@ -329,6 +338,7 @@
 const params = new URLSearchParams(location.search)
 const API_BASE = (params.get('api') || 'http://localhost:5002').replace(/\/$/, '') + '/api/simulation'
 document.getElementById('api-label').textContent = API_BASE
+document.getElementById('api-label-dash').textContent = API_BASE
 
 // ─── State ──────────────────────────────────────────────────────────────────
 let activityLog = []
@@ -640,8 +650,15 @@ function closePodModal() {
 }
 
 // ─── Polling ─────────────────────────────────────────────────────────────────
-const dot  = document.getElementById('status-dot')
-const stxt = document.getElementById('status-text')
+const dot     = document.getElementById('status-dot')
+const stxt    = document.getElementById('status-text')
+const dotDash = document.getElementById('status-dot-dash')
+const stxtDash= document.getElementById('status-text-dash')
+
+function setStatus(cls, text) {
+  dot.className = cls; stxt.textContent = text
+  dotDash.className = cls + ' ml-1'; stxtDash.textContent = text
+}
 
 async function fetchStats() {
   if (!pollingActive) return
@@ -649,18 +666,15 @@ async function fetchStats() {
     const res = await fetch(`${API_BASE}/summary`)
     if (res.status === 404) {
       pollingActive = false
-      stxt.textContent = 'summary endpoint not found'
-      dot.className = 'inline-block w-2 h-2 rounded-full bg-red-500'
+      setStatus('inline-block w-2 h-2 rounded-full bg-red-500', 'summary endpoint not found')
       return
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     updateStats(data)
-    dot.className = 'inline-block w-2 h-2 rounded-full bg-emerald-400'
-    stxt.textContent = 'live'
+    setStatus('inline-block w-2 h-2 rounded-full bg-emerald-400', 'live')
   } catch {
-    dot.className = 'inline-block w-2 h-2 rounded-full bg-amber-400'
-    stxt.textContent = 'unreachable'
+    setStatus('inline-block w-2 h-2 rounded-full bg-amber-400', 'unreachable')
   }
 }
 
