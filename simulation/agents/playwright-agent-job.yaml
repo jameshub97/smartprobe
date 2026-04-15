@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: playwright-agent
+spec:
+  parallelism: 1
+  completions: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: playwright-agent
+        image: playwright-agent:latest
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: scripts
+          mountPath: /app/run.py
+          subPath: run.py
+        env:
+        - name: TARGET_URL
+          value: "http://frontend-service"
+        - name: AGENT_PERSONA
+          value: "browser"
+        - name: NETWORK_LATENCY
+          value: "50"
+        - name: PACKET_LOSS
+          value: "2"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: scripts
+        configMap:
+          name: agent-script

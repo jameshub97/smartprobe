@@ -1,0 +1,11 @@
+
+playwright
+langgraph
+langchain
+openai
+pytest
+rich
+flask-cors
+fastapi
+uvicorn
+prometheus-client
