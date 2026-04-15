@@ -45,5 +45,7 @@ spec:
           value: "{{ .Values.backendApi }}"
         - name: SIM_API
           value: "{{ .Values.simApi }}"
+        - name: COORD_API
+          value: "{{ .Values.coordApi }}"
         resources:
           {{- toYaml .Values.resources | nindent 10 }}

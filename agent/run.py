@@ -31,6 +31,7 @@ API_BASE = TARGET_URL.rstrip("/")
 
 print(f"[agent] starting: {PERSONA} ({POD_NAME})")
 print(f"[agent] target: {TARGET_URL}, sim: {SIM_API}")
+print(f"[agent] coordinator: {COORD_API}")
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -81,11 +82,17 @@ def api_post(path, body, token=None, timeout=10):
 
 
 def coord_get(path, params=None):
-    return requests.get(f"{COORD_API}{path}", params=params, timeout=5)
+    r = requests.get(f"{COORD_API}{path}", params=params, timeout=5)
+    if not r.content:
+        raise ValueError(f"empty response (HTTP {r.status_code}) from {COORD_API}{path}")
+    return r
 
 
 def coord_post(path, body):
-    return requests.post(f"{COORD_API}{path}", json=body, timeout=5)
+    r = requests.post(f"{COORD_API}{path}", json=body, timeout=5)
+    if not r.content:
+        raise ValueError(f"empty response (HTTP {r.status_code}) from {COORD_API}{path}")
+    return r
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────

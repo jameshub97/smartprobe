@@ -8,6 +8,7 @@ persona: default
 targetUrl: http://host.docker.internal:5173
 backendApi: http://host.docker.internal:5001/api/simulation/results
 simApi: http://host.docker.internal:5002/api/simulation
+coordApi: http://host.docker.internal:5003/api/coordinator
 networkLatency: "0"
 packetLoss: "0"
 

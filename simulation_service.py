@@ -1493,6 +1493,7 @@ class TestController:
             values['targetUrl'] = 'http://host.docker.internal:5001'
             values['simApi'] = 'http://host.docker.internal:5002/api/simulation'
             values['backendApi'] = 'http://host.docker.internal:5001/api/simulation/results'
+            values['coordApi'] = 'http://host.docker.internal:5003/api/coordinator'
             values['image.pullPolicy'] = 'Never'  # image imported into containerd on all nodes
         if kueue:
             values['kueue.enabled'] = True
