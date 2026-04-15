@@ -434,6 +434,16 @@ def _run_startup_diagnostics() -> tuple:
     return True, results
 
 
+def _open_dashboard():
+    """Open the simulation dashboard in the default browser."""
+    import webbrowser
+    dashboard_path = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), '..', '..', 'dashboard', 'index.html')
+    )
+    if os.path.exists(dashboard_path):
+        webbrowser.open(f"file://{dashboard_path}")
+
+
 def interactive_menu():
     # Step 1: K8s check — hard prerequisite, runs first.
     if not _early_k8s_check():
@@ -441,9 +451,11 @@ def interactive_menu():
     # Step 2: API check — simulation service prompt.
     if not _early_api_check():
         return
-    # Step 3: Full parallel probe table (includes Docker API, runtime, etc.)
+    # Step 3: Open dashboard in browser now that the service is confirmed up.
+    _open_dashboard()
+    # Step 4: Full parallel probe table (includes Docker API, runtime, etc.)
     ok, results = _run_startup_diagnostics()
     if not ok:
         return
-    # Step 4: Main menu
+    # Step 5: Main menu
     welcome_menu()
