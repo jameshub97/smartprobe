@@ -1,6 +1,6 @@
 
 # 1. All imports first
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_from_directory
 from flask_cors import CORS
 
 # Prometheus metrics
@@ -59,7 +59,14 @@ logger = logging.getLogger(__name__)
 
 # 4. CREATE FLASK APP BEFORE ROUTES
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080'])
+CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080', 'http://localhost:5002'])
+
+_DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), 'dashboard')
+
+@app.route('/')
+def dashboard():
+    """Serve the simulation dashboard."""
+    return send_from_directory(_DASHBOARD_DIR, 'index.html')
 
 # --- Prometheus Metrics ---
 SIM_BUILD_INFO = Info('simulation_service', 'Simulation service build info')

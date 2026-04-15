@@ -437,11 +437,7 @@ def _run_startup_diagnostics() -> tuple:
 def _open_dashboard():
     """Open the simulation dashboard in the default browser."""
     import webbrowser
-    dashboard_path = os.path.normpath(
-        os.path.join(os.path.dirname(__file__), '..', '..', 'dashboard', 'index.html')
-    )
-    if os.path.exists(dashboard_path):
-        webbrowser.open(f"file://{dashboard_path}")
+    webbrowser.open("http://localhost:5002")
 
 
 def interactive_menu():
