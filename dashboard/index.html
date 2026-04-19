@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smartprobe Dashboard</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%234c1d95'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%23a78bfa' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23a78bfa'/%3E%3Cline x1='16' y1='5' x2='16' y2='9' stroke='%23a78bfa' stroke-width='1.5' stroke-linecap='round'/%3E%3Cline x1='16' y1='23' x2='16' y2='27' stroke='%23a78bfa' stroke-width='1.5' stroke-linecap='round'/%3E%3Cline x1='5' y1='16' x2='9' y2='16' stroke='%23a78bfa' stroke-width='1.5' stroke-linecap='round'/%3E%3Cline x1='23' y1='16' x2='27' y2='16' stroke='%23a78bfa' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <title>smartprobe</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -13,6 +13,7 @@
     .tab-active-all { color: #334155; background: #f1f5f9; }
     .tab-active-pods { color: #065f46; background: #ecfdf5; }
     .tab-active-tx { color: #5b21b6; background: #f5f3ff; }
+    .tab-active-agents { color: #3730a3; background: #eef2ff; }
     pre { white-space: pre-wrap; word-break: break-all; }
   </style>
 </head>
@@ -21,12 +22,12 @@
 <!-- Header -->
 <div class="bg-indigo-900 text-white px-6 py-4 flex items-center justify-between shadow-sm">
   <div class="flex items-center gap-4">
-    <span class="text-xl font-bold tracking-tight">smartprobe</span>
+    <button onclick="switchView('dashboard')" class="text-xl font-bold tracking-tight hover:opacity-75 transition-opacity">smartprobe</button>
     <nav class="flex items-center gap-1 ml-2">
-      <button id="nav-dashboard" onclick="switchView('dashboard')"
-        class="text-sm px-3 py-1 rounded font-medium bg-white/20 text-white">Dashboard</button>
       <button id="nav-analytics" onclick="switchView('analytics')"
         class="text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10">Analytics</button>
+      <button id="nav-agents" onclick="switchView('agents')"
+        class="text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10">Agents</button>
     </nav>
   </div>
   <div class="flex items-center gap-3">
@@ -38,61 +39,33 @@
 
 <div id="view-dashboard" class="max-w-7xl mx-auto px-4 py-6 space-y-4">
 
-  <!-- API URL indicator -->
-  <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-    <span class="text-slate-300">↳</span>
-    <span class="text-slate-400">connected to</span>
-    <span id="api-label-dash" class="text-sky-600 font-semibold"></span>
-    <span id="status-dot-dash" class="inline-block w-2 h-2 rounded-full bg-slate-300 ml-1"></span>
-    <span id="status-text-dash" class="text-slate-400">connecting…</span>
-  </div>
-
-  <!-- Status Overview -->
+  <!-- Stats Bar -->
   <div class="bg-white border border-slate-300 rounded-xl shadow-sm px-5 py-3">
     <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
-      <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider font-sans mr-1">Status</span>
-      <span><span class="text-slate-500">Total</span> <span id="s-total" class="font-bold text-indigo-700">—</span></span>
+      <!-- Pod counts (from Prometheus gauges) -->
+      <span><span class="text-slate-400 text-xs">ACTIVE</span> <span id="s-pods" class="font-bold text-indigo-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Pods</span> <span id="s-pods" class="font-bold text-sky-600">—</span></span>
+      <span><span class="text-slate-400 text-xs">SUCCESS</span> <span id="s-success" class="font-bold text-indigo-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Success</span> <span id="s-success" class="font-bold text-indigo-500">—</span></span>
+      <span><span class="text-slate-400 text-xs">FAILED</span> <span id="s-errors" class="font-bold text-red-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Pending</span> <span id="s-pending" class="font-bold text-amber-600">—</span></span>
+      <span><span class="text-slate-400 text-xs">PENDING</span> <span id="s-pending" class="font-bold text-amber-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Errors</span> <span id="s-errors" class="font-bold text-red-600">—</span></span>
+      <!-- Throughput + ETA (from perf calcs) -->
+      <span><span class="text-slate-400 text-xs">THROUGHPUT</span> <span id="p-rate" class="font-bold text-orange-500 ml-1">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-400 text-xs">ETA</span> <span id="p-eta" class="font-bold text-sky-600 ml-1">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-400 text-xs">AVG</span> <span id="p-avg" class="font-bold text-slate-600 ml-1">—</span></span>
       <!-- Kueue extras injected by JS -->
       <span id="kueue-section" class="hidden contents">
         <span class="text-slate-200">|</span>
-        <span><span class="text-slate-500">Admitted</span> <span id="s-admitted" class="font-bold text-violet-600">—</span></span>
+        <span><span class="text-slate-400 text-xs">ADMITTED</span> <span id="s-admitted" class="font-bold text-violet-600 ml-1">—</span></span>
         <span class="text-slate-200">|</span>
-        <span><span class="text-slate-500">Queued</span> <span id="s-queued" class="font-bold text-indigo-600">—</span></span>
+        <span><span class="text-slate-400 text-xs">QUEUED</span> <span id="s-queued" class="font-bold text-indigo-600 ml-1">—</span></span>
         <span class="text-slate-200">|</span>
-        <span><span class="text-slate-500">Drain</span> <span id="s-drain" class="font-bold text-fuchsia-600">—</span></span>
-        <span id="cpu-section" class="hidden contents">
-          <span class="text-slate-200">|</span>
-          <span><span class="text-slate-500">CPU</span> <span id="s-cpu" class="font-bold text-teal-600">—</span></span>
-        </span>
-        <span id="mem-section" class="hidden contents">
-          <span class="text-slate-200">|</span>
-          <span><span class="text-slate-500">Mem</span> <span id="s-mem" class="font-bold text-cyan-600">—</span></span>
-        </span>
+        <span><span class="text-slate-400 text-xs">DRAIN</span> <span id="s-drain" class="font-bold text-fuchsia-600 ml-1">—</span></span>
       </span>
-    </div>
-  </div>
-
-  <!-- Performance Metrics -->
-  <div class="bg-white border border-slate-300 rounded-xl shadow-sm px-5 py-3">
-    <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
-      <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider font-sans mr-1">Perf</span>
-      <span><span class="text-slate-500">Throughput</span> <span id="p-rate" class="font-bold text-orange-600">—</span></span>
-      <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Complete</span> <span id="p-pct" class="font-bold text-lime-600">—</span></span>
-      <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">ETA</span> <span id="p-eta" class="font-bold text-sky-600">—</span></span>
-      <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Avg</span> <span id="p-avg" class="font-bold text-slate-600">—</span></span>
-      <span class="text-slate-200">|</span>
-      <span><span class="text-slate-500">Activation</span> <span id="p-activation" class="font-bold text-amber-600">—</span></span>
     </div>
   </div>
 
@@ -133,6 +106,10 @@
         <button id="tab-tx" onclick="setTab('transactions')"
           class="text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600">
           Transactions<span id="tab-tx-count" class="ml-1 text-xs font-normal text-violet-400"></span>
+        </button>
+        <button id="tab-agents" onclick="setTab('agents')"
+          class="text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600">
+          Agents<span id="tab-agents-count" class="ml-1 text-xs font-normal text-indigo-400"></span>
         </button>
       </div>
       <div class="flex items-center gap-3">
@@ -317,6 +294,17 @@
   </div>
 </div>
 
+<!-- Agents view -->
+<div id="view-agents" class="hidden max-w-7xl mx-auto px-4 py-6 space-y-4">
+  <div class="flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Agent Activity</h2>
+    <span id="agents-count" class="text-xs text-slate-400"></span>
+  </div>
+  <div id="agent-narrative-grid" class="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+    <div class="text-slate-400 text-sm col-span-full py-6 text-center">Waiting for agents…</div>
+  </div>
+</div>
+
 <!-- Pod Log Modal -->
 <div id="pod-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
      onclick="if(event.target===this) closePodModal()">
@@ -333,16 +321,78 @@
   </div>
 </div>
 
+<!-- Agent Detail Modal -->
+<div id="agent-detail-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+     onclick="if(event.target===this) closeAgentDetailModal()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
+      <div>
+        <div class="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-0.5">Agent Detail</div>
+        <span id="detail-pod-name" class="font-mono text-sm font-semibold text-slate-700"></span>
+      </div>
+      <button onclick="closeAgentDetailModal()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-5">
+      <div id="detail-loading" class="text-slate-400 text-sm">Loading…</div>
+      <div id="detail-content" class="hidden space-y-4">
+        <!-- Info row -->
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+            <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Username</div>
+            <div id="detail-username" class="font-mono text-slate-700 font-medium">—</div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+            <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Role / Persona</div>
+            <div id="detail-persona" class="font-mono text-slate-700 font-medium">—</div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+            <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Status</div>
+            <div id="detail-status" class="font-medium">—</div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+            <div class="text-xs text-slate-400 uppercase tracking-wide mb-1">Duration</div>
+            <div id="detail-duration" class="font-mono text-slate-700 font-medium">—</div>
+          </div>
+        </div>
+        <!-- Live Activity (active agents without a result yet) -->
+        <div id="detail-history-section" class="hidden">
+          <div class="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-2">Live Activity</div>
+          <div id="detail-history" class="space-y-0.5 text-sm"></div>
+        </div>
+        <!-- Actions (completed agents) -->
+        <div id="detail-actions-section">
+          <div class="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-2">Playwright Actions</div>
+          <div id="detail-actions" class="space-y-1 text-sm"></div>
+          <div id="detail-no-actions" class="hidden text-slate-400 text-sm italic">No action data received yet — result posted after agent completes.</div>
+        </div>
+        <!-- Error -->
+        <div id="detail-error-section" class="hidden">
+          <div class="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">Error</div>
+          <div id="detail-error-msg" class="text-red-600 text-sm font-mono bg-red-50 rounded px-3 py-2 border border-red-200"></div>
+        </div>
+      </div>
+      <div id="detail-fetch-error" class="hidden text-red-400 text-sm"></div>
+    </div>
+    <div class="shrink-0 px-5 py-3 border-t border-slate-200 flex items-center justify-between">
+      <span class="text-xs text-slate-400" id="detail-last-seen"></span>
+      <button id="detail-logs-btn" onclick="" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg font-medium">View kubectl logs</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── Config ────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
 const API_BASE = (params.get('api') || 'http://localhost:5002').replace(/\/$/, '') + '/api/simulation'
 document.getElementById('api-label').textContent = API_BASE
-document.getElementById('api-label-dash').textContent = API_BASE
 
 // ─── State ──────────────────────────────────────────────────────────────────
+let agentRoles = {}   // pod → {role, username}
+let agentStates = {}  // pod → {timestamp, type, details, username} — all pods, never trimmed
+let agentResults = []
 let activityLog = []
 let activitySummary = { sleeping: 0, pending: 0, running: 0 }
+let activityTotals = { started: 0, completed: 0, failed: 0, pending: 0, registered: 0, logged_in: 0 }
 let currentTab = 'all'
 let expanded = true
 let pollingActive = true
@@ -419,12 +469,135 @@ function setText(id, val) {
   if (el) el.textContent = val
 }
 
+// ─── Agent narrative tab ────────────────────────────────────────────────────
+const ROLE_BADGE = {
+  seller:   'bg-orange-100 text-orange-700 border border-orange-200',
+  buyer:    'bg-sky-100 text-sky-700 border border-sky-200',
+  observer: 'bg-slate-100 text-slate-600 border border-slate-200',
+}
+
+function agentNarrative(role, type, details) {
+  if (!type) return 'Waiting to start…'
+  switch (type) {
+    case 'registered':          return 'Registering with the coordinator'
+    case 'logged_in':           return 'Logged in and ready'
+    case 'browsed':             return 'Browsing the asset marketplace'
+    case 'asset_listed':        return 'Listing an asset for sale'
+    case 'asset_created':       return details ? `Created asset — ${details}` : 'Created a new asset'
+    case 'transfer_started':    return details ? `Claiming asset — ${details}` : 'Attempting to claim an asset'
+    case 'transfer_completed':  return details ? `Transfer complete — ${details}` : 'Successfully transferred an asset'
+    case 'transfer_failed':     return details ? `Transfer failed — ${details}` : 'Transfer attempt failed'
+    case 'conflict_detected':   return 'Lost a race condition — another buyer was faster'
+    case 'consistency_check':   return 'Checking data consistency'
+    case 'agent_done':          return details ? `Done — ${details}` : 'Completed all tasks'
+    case 'started':             return 'Starting up…'
+    case 'pending':             return 'Pending'
+    case 'completed':           return details ? `Completed — ${details}` : 'Completed'
+    case 'failed':              return details ? `Failed — ${details}` : 'Failed'
+    default:                    return type.replace(/_/g, ' ')
+  }
+}
+
+function agentNarrativeColor(type) {
+  switch (type) {
+    case 'transfer_completed': case 'agent_done': case 'completed': return 'text-indigo-600'
+    case 'transfer_failed': case 'failed': return 'text-red-500'
+    case 'conflict_detected': return 'text-amber-600'
+    case 'transfer_started': case 'asset_created': return 'text-violet-600'
+    case 'registered': case 'logged_in': return 'text-slate-500'
+    default: return 'text-sky-600'
+  }
+}
+
+function agentStatusIcon(type) {
+  if (!type) return '⏳'
+  if (['agent_done','completed','transfer_completed'].includes(type)) return '✅'
+  if (['transfer_failed','failed'].includes(type)) return '❌'
+  if (type === 'conflict_detected') return '⚡'
+  if (['transfer_started','asset_created','asset_listed'].includes(type)) return '🔄'
+  if (type === 'registered' || type === 'logged_in') return '🔑'
+  return '▶'
+}
+
+function renderAgentNarratives() {
+  // Build per-pod latest event map
+  const latest = {}
+  for (const e of activityLog) {
+    if (!latest[e.pod] || e.time > latest[e.pod].time) latest[e.pod] = e
+  }
+
+  const pods = Object.keys(latest)
+  if (pods.length === 0) {
+    document.getElementById('agent-narrative-grid').innerHTML =
+      '<div class="text-slate-400 text-sm col-span-full py-6 text-center">No agent activity yet…</div>'
+    setText('agents-count', '')
+    return
+  }
+
+  // Sort: active first, then by pod name
+  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+  pods.sort((a, b) => {
+    const aDone = DONE_TYPES.has(latest[a].type), bDone = DONE_TYPES.has(latest[b].type)
+    if (aDone !== bDone) return aDone ? 1 : -1
+    return a.localeCompare(b)
+  })
+
+  const active = pods.filter(p => !DONE_TYPES.has(latest[p].type)).length
+  const done   = pods.filter(p =>  DONE_TYPES.has(latest[p].type)).length
+  setText('agents-count', `${active} active · ${done} done · ${pods.length} total`)
+
+  document.getElementById('agent-narrative-grid').innerHTML = pods.map(pod => {
+    const e    = latest[pod]
+    const info = agentRoles[pod] || {}
+    const role = info.role || 'unknown'
+    const roleBadge = ROLE_BADGE[role] || ROLE_BADGE.observer
+    const narrative = agentNarrative(role, e.type, e.details)
+    const color     = agentNarrativeColor(e.type)
+    const icon      = agentStatusIcon(e.type)
+    const isDone    = DONE_TYPES.has(e.type)
+    const cardBg    = isDone ? 'from-slate-50/90 to-slate-100/80 opacity-70' : 'from-white/95 to-indigo-50/80'
+    return `
+    <div class="border border-indigo-300/30 rounded-xl bg-gradient-to-b ${cardBg} p-4 flex flex-col gap-2 shadow-sm">
+      <div class="flex items-start justify-between gap-2">
+        <span class="font-bold text-indigo-700 text-sm truncate" title="${escHtml(pod)}">🤖 ${escHtml(pod)}</span>
+        <span class="px-2 py-0.5 rounded-full text-xs font-semibold capitalize shrink-0 ${escHtml(roleBadge)}">${escHtml(role)}</span>
+      </div>
+      <div class="flex items-start gap-2 mt-1">
+        <span class="text-base leading-tight shrink-0">${icon}</span>
+        <span class="text-sm ${color} leading-snug">${escHtml(narrative)}</span>
+      </div>
+      <div class="text-xs text-slate-400 mt-auto pt-1">${escHtml(e.timestamp || '')}</div>
+    </div>`
+  }).join('')
+}
+
+async function fetchAgentRoles() {
+  // coordinator runs on 5003; derive its base from API_BASE
+  const coordBase = API_BASE.replace(/\/api\/simulation$/, '').replace(/:5002/, ':5003')
+  try {
+    const res = await fetch(`${coordBase}/api/coordinator/agents`)
+    if (!res.ok) return
+    const data = await res.json()
+    agentRoles = {}
+    for (const a of (data.agents ?? [])) agentRoles[a.pod] = a
+  } catch { /* coordinator may not be running */ }
+}
+
 function updateStats(data) {
-  setText('s-total',   data.total ?? 0)
-  setText('s-pods',    data.activePods ?? 0)
-  setText('s-success', data.success ?? 0)
-  setText('s-pending', data.pending ?? 0)
-  setText('s-errors',  data.errors ?? 0)
+  // Use Prometheus gauges when available, fall back to k8s summary fields
+  const prom = data.prometheus || {}
+  const liveActive    = prom.active    ?? data.activePods ?? 0
+  const liveSucceeded = prom.succeeded ?? data.success    ?? 0
+  const liveFailed    = prom.failed    ?? data.errors     ?? 0
+  const livePending   = prom.pending   ?? data.pending    ?? 0
+
+  // When k8s shows nothing running, fall back to cumulative activity totals
+  // so the stats bar stays meaningful after pods have been cleaned up.
+  const anyLive = liveActive + liveSucceeded + liveFailed + livePending > 0
+  setText('s-pods',    anyLive ? liveActive    : activityTotals.started - activityTotals.completed - activityTotals.failed || 0)
+  setText('s-success', anyLive ? liveSucceeded : activityTotals.completed || liveSucceeded)
+  setText('s-errors',  anyLive ? liveFailed    : activityTotals.failed    || liveFailed)
+  setText('s-pending', anyLive ? livePending   : 0)
 
   const kueue = data.kueue
   if (kueue?.active) {
@@ -432,12 +605,6 @@ function updateStats(data) {
     setText('s-admitted', kueue.admitted_workloads ?? 0)
     setText('s-queued',   kueue.pending_workloads ?? 0)
     setText('s-drain',    fmtDrain(kueue.estimated_drain_seconds ?? 0, true))
-
-    const quotas = kueue.cluster_queue?.quotas ?? {}
-    setVisible('cpu-section', !!quotas.cpu)
-    if (quotas.cpu) setText('s-cpu', quotas.cpu)
-    setVisible('mem-section', !!quotas.memory)
-    if (quotas.memory) setText('s-mem', quotas.memory)
   } else {
     setVisible('kueue-section', false)
   }
@@ -446,20 +613,10 @@ function updateStats(data) {
   const t = data.throughput
   if (t && t.completed) {
     setText('p-rate', t.agentsPerSecond >= 1 ? `${t.agentsPerSecond}/s` : `${t.agentsPerMinute}/m`)
-    setText('p-pct',  `${t.percentComplete}%`)
     setText('p-eta',  t.etaSeconds > 0 ? fmtTime(t.etaSeconds) : 'done')
     setText('p-avg',  t.avgDuration != null ? `${t.avgDuration}s` : '—')
   } else {
-    ['p-rate','p-pct','p-eta','p-avg'].forEach(id => setText(id, '—'))
-  }
-
-  const a = data.activation
-  if (a && a.count > 0 && Number.isFinite(a.avg)) {
-    const fmt = s => !Number.isFinite(s) ? '—' : s < 60 ? `${s}s` : `${Math.floor(s/60)}m${Math.round(s%60)}s`
-    document.getElementById('p-activation').title = `p95: ${fmt(a.p95)} (${a.count} pods)`
-    setText('p-activation', fmt(a.avg))
-  } else {
-    setText('p-activation', '—')
+    ['p-rate','p-eta','p-avg'].forEach(id => setText(id, '—'))
   }
 
   // Coordinator
@@ -520,7 +677,7 @@ function escHtml(s) {
 // ─── Activity log UI ─────────────────────────────────────────────────────────
 function setTab(tab) {
   currentTab = tab
-  const tabs = { all: 'tab-all', pods: 'tab-pods', transactions: 'tab-tx' }
+  const tabs = { all: 'tab-all', pods: 'tab-pods', transactions: 'tab-tx', agents: 'tab-agents' }
   Object.keys(tabs).forEach(t => {
     const el = document.getElementById(tabs[t])
     el.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors text-slate-400 hover:text-slate-600'
@@ -528,8 +685,84 @@ function setTab(tab) {
   const active = document.getElementById(tabs[tab])
   if (tab === 'all')          active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-all'
   else if (tab === 'pods')    active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-pods'
+  else if (tab === 'agents')  active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-agents'
   else                        active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-tx'
-  renderLog()
+  if (tab === 'agents') renderAgentNarrativesCompact()
+  else renderLog()
+}
+
+function renderAgentNarrativesCompact() {
+  const pods = Object.keys(agentStates)
+  const container = document.getElementById('log-container')
+  if (pods.length === 0) {
+    container.innerHTML = '<div class="text-slate-400 py-2">No agent activity yet…</div>'
+    return
+  }
+  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+  pods.sort((a, b) => {
+    const aDone = DONE_TYPES.has(agentStates[a].type), bDone = DONE_TYPES.has(agentStates[b].type)
+    if (aDone !== bDone) return aDone ? 1 : -1
+    return a.localeCompare(b)
+  })
+  const active = pods.filter(p => !DONE_TYPES.has(agentStates[p].type)).length
+  const done = pods.length - active
+  setText('tab-agents-count', `(${pods.length})`)
+  setText('log-summary', `${pods.length} agents · ${active} active · ${done} finished`)
+  container.innerHTML = pods.map(pod => {
+    const e = agentStates[pod]
+    const icon = agentStatusIcon(e.type)
+    const narrative = agentNarrative('unknown', e.type, e.details)
+    const color = agentNarrativeColor(e.type)
+    const logsBtn = (e.type === 'completed' || e.type === 'agent_done')
+      ? ` <button onclick="viewPodLogs('${escHtml(pod)}')" class="ml-1 text-slate-400 hover:text-sky-600 underline">logs</button>`
+      : ''
+    const notesBtn = ` <button onclick="viewAgentDetail('${escHtml(pod)}')" class="ml-1 text-slate-400 hover:text-indigo-600 underline">notes</button>`
+    return `<div class="flex gap-2 py-0.5 items-baseline">
+      <span class="text-slate-400 shrink-0 tabular-nums">${escHtml(e.timestamp || '')}</span>
+      <span class="shrink-0">${icon}</span>
+      <span class="text-indigo-600 font-medium shrink-0 truncate max-w-[14rem]" title="${escHtml(pod)}">${escHtml(pod)}</span>
+      <span class="${color}">${escHtml(narrative)}${logsBtn}${notesBtn}</span>
+    </div>`
+  }).join('')
+}
+
+async function fetchLiveLogs() {
+  const container = document.getElementById('log-container')
+  try {
+    const res = await fetch(`${API_BASE}/live-logs?tail=10`)
+    if (!res.ok) {
+      container.innerHTML = '<div class="text-slate-400 py-2">Could not fetch pod logs.</div>'
+      return
+    }
+    const data = await res.json()
+    setText('tab-agents-count', data.pods ? `(${data.pods})` : '')
+    if (!data.lines || data.lines.length === 0) {
+      container.innerHTML = '<div class="text-slate-400 py-2">No running agents — waiting for pods to start…</div>'
+      return
+    }
+    // Group by pod, show pod header + lines
+    const byPod = {}
+    const podOrder = []
+    for (const {pod, line} of data.lines) {
+      if (!byPod[pod]) { byPod[pod] = []; podOrder.push(pod) }
+      byPod[pod].push(line)
+    }
+    container.innerHTML = podOrder.map(pod => {
+      const shortPod = pod.length > 45 ? pod.slice(0, 42) + '…' : pod
+      const rows = byPod[pod].map(line =>
+        `<div class="py-0 leading-5 text-slate-700 whitespace-pre-wrap break-all">${escHtml(line)}</div>`
+      ).join('')
+      return `<div class="mb-3">
+        <div class="text-xs font-mono text-indigo-600 font-semibold mb-0.5 flex items-center gap-2">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <button onclick="viewPodLogs('${escHtml(pod)}')" class="hover:underline" title="View full logs">${escHtml(shortPod)}</button>
+        </div>
+        ${rows}
+      </div>`
+    }).join('<div class="border-t border-slate-100 my-2"></div>')
+  } catch {
+    container.innerHTML = '<div class="text-slate-400 py-2">Could not reach simulation service.</div>'
+  }
 }
 
 function toggleExpand() {
@@ -561,7 +794,7 @@ function renderLog() {
     } else {
       summary += ` · ${s.pending} pending`
     }
-  } else {
+  } else if (currentTab === 'transactions') {
     let completed = 0, started = 0, failed = 0, conflicts = 0
     for (const e of txLog) {
       if (e.type === 'transfer_completed') completed++
@@ -570,8 +803,16 @@ function renderLog() {
       else if (e.type === 'conflict_detected') conflicts++
     }
     summary = `${completed} completed · ${started} started · ${conflicts} conflicts · ${failed} failed`
+  } else { // agents
+    const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+    const agentPods = Object.keys(agentStates)
+    const done = agentPods.filter(p => DONE_TYPES.has(agentStates[p].type)).length
+    const active = agentPods.length - done
+    summary = `${agentPods.length} agents · ${active} active · ${done} finished`
   }
   setText('log-summary', summary)
+
+  if (currentTab === 'agents') { renderAgentNarrativesCompact(); return }
 
   const base = currentTab === 'pods' ? podLog : currentTab === 'transactions' ? txLog : activityLog
   const display = [...base].reverse()
@@ -649,37 +890,192 @@ function closePodModal() {
   document.getElementById('pod-modal').classList.add('hidden')
 }
 
-// ─── Polling ─────────────────────────────────────────────────────────────────
-const dot     = document.getElementById('status-dot')
-const stxt    = document.getElementById('status-text')
-const dotDash = document.getElementById('status-dot-dash')
-const stxtDash= document.getElementById('status-text-dash')
+// ─── Agent detail modal ───────────────────────────────────────────────────────
+const ACTION_LABELS = {
+  'created': { icon: '🏗️', label: 'Created asset' },
+  'browsed': { icon: '👁️', label: 'Browsed assets' },
+  'claimed': { icon: '🤝', label: 'Claimed asset' },
+  'transferred': { icon: '💸', label: 'Transferred asset' },
+  'conflict': { icon: '⚠️', label: 'Conflict detected' },
+  'checked': { icon: '🔍', label: 'Checked assets' },
+  'inconsistency': { icon: '🔴', label: 'Inconsistency found' },
+  'create_failed': { icon: '❌', label: 'Create failed' },
+  'create_error': { icon: '❌', label: 'Create error' },
+  'pool_error': { icon: '❌', label: 'Pool fetch error' },
+  'no_pool': { icon: '⏳', label: 'Pool empty' },
+  'transfer_failed': { icon: '❌', label: 'Transfer failed' },
+}
+
+function parseAction(raw) {
+  const [key, ...rest] = raw.split(':')
+  const val = rest.join(':')
+  const meta = ACTION_LABELS[key] || { icon: '▸', label: key }
+  return { icon: meta.icon, label: meta.label, detail: val || null }
+}
+
+const STATUS_STYLES = {
+  'success': 'bg-emerald-100 text-emerald-700 border border-emerald-200',
+  'failed': 'bg-red-100 text-red-700 border border-red-200',
+  'error': 'bg-red-100 text-red-700 border border-red-200',
+  'timeout': 'bg-amber-100 text-amber-700 border border-amber-200',
+}
+
+async function viewAgentDetail(pod) {
+  document.getElementById('detail-pod-name').textContent = pod
+  document.getElementById('agent-detail-modal').classList.remove('hidden')
+  document.getElementById('detail-loading').classList.remove('hidden')
+  document.getElementById('detail-content').classList.add('hidden')
+  document.getElementById('detail-fetch-error').classList.add('hidden')
+
+  // Wire up the "View kubectl logs" button
+  document.getElementById('detail-logs-btn').onclick = () => {
+    closeAgentDetailModal()
+    viewPodLogs(pod)
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/agent-detail/${encodeURIComponent(pod)}`)
+    document.getElementById('detail-loading').classList.add('hidden')
+    if (!res.ok) {
+      const el = document.getElementById('detail-fetch-error')
+      el.textContent = `Error loading detail (HTTP ${res.status})`
+      el.classList.remove('hidden')
+      return
+    }
+    const data = await res.json()
+    if (data.error) {
+      const el = document.getElementById('detail-fetch-error')
+      el.textContent = data.error
+      el.classList.remove('hidden')
+      return
+    }
+
+    const state = data.state || {}
+    const result = data.result || null
+    const role = data.role || result?.persona || null
+
+    // Populate info grid
+    document.getElementById('detail-username').textContent = state.username || '—'
+    document.getElementById('detail-persona').textContent = role || '—'
+
+    // Status badge
+    const statusEl = document.getElementById('detail-status')
+    const rawStatus = result?.status || state.type || '—'
+    const badgeCls = STATUS_STYLES[rawStatus] || 'bg-slate-100 text-slate-600 border border-slate-200'
+    statusEl.innerHTML = `<span class="inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${badgeCls}">${escHtml(rawStatus)}</span>`
+
+    // Duration
+    const durEl = document.getElementById('detail-duration')
+    if (result?.durationMs) {
+      const secs = (result.durationMs / 1000).toFixed(1)
+      durEl.textContent = `${secs}s`
+    } else {
+      durEl.textContent = '—'
+    }
+
+    // Last-seen timestamp
+    document.getElementById('detail-last-seen').textContent = state.timestamp ? `Last seen ${state.timestamp}` : ''
+
+    // Live history (active agents)
+    const historySection = document.getElementById('detail-history-section')
+    const historyEl = document.getElementById('detail-history')
+    const actionsSection = document.getElementById('detail-actions-section')
+    const history = state.history || []
+    const actions = result?.actions || []
+
+    const HISTORY_ICONS = {
+      registered: '📝', logged_in: '🔑', asset_created: '🏗️', asset_listed: '👁️',
+      transfer_started: '🔄', transfer_completed: '💸', transfer_failed: '❌',
+      conflict_detected: '⚠️', consistency_check: '🔍', agent_done: '✅',
+      completed: '✅', failed: '❌',
+    }
+
+    if (actions.length > 0) {
+      // Completed — show full action summary
+      historySection.classList.add('hidden')
+      actionsSection.classList.remove('hidden')
+      const actionsEl = document.getElementById('detail-actions')
+      const noActionsEl = document.getElementById('detail-no-actions')
+      actionsEl.innerHTML = actions.map(raw => {
+        const { icon, label, detail } = parseAction(raw)
+        const detailHtml = detail ? `<span class="text-slate-400 font-mono ml-1 text-xs">${escHtml(detail)}</span>` : ''
+        return `<div class="flex items-baseline gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-100">
+          <span class="shrink-0">${icon}</span>
+          <span class="text-slate-700">${escHtml(label)}</span>
+          ${detailHtml}
+        </div>`
+      }).join('')
+      actionsEl.classList.remove('hidden')
+      noActionsEl.classList.add('hidden')
+    } else if (history.length > 0) {
+      // Active — show rolling event trail
+      actionsSection.classList.add('hidden')
+      historySection.classList.remove('hidden')
+      historyEl.innerHTML = history.map(h => {
+        const icon = HISTORY_ICONS[h.type] || '▸'
+        const detailHtml = h.details ? `<span class="text-slate-400 ml-1 text-xs">${escHtml(h.details)}</span>` : ''
+        return `<div class="flex items-baseline gap-2 py-0.5">
+          <span class="text-slate-400 shrink-0 tabular-nums text-xs">${escHtml(h.ts)}</span>
+          <span class="shrink-0 text-sm">${icon}</span>
+          <span class="text-slate-700 text-sm">${escHtml(h.type.replace(/_/g, ' '))}${detailHtml}</span>
+        </div>`
+      }).join('')
+    } else {
+      // No data at all
+      actionsSection.classList.remove('hidden')
+      historySection.classList.add('hidden')
+      document.getElementById('detail-actions').classList.add('hidden')
+      document.getElementById('detail-no-actions').classList.remove('hidden')
+    }
+
+    // Error section
+    const errSection = document.getElementById('detail-error-section')
+    const errMsg = document.getElementById('detail-error-msg')
+    if (result?.error) {
+      errMsg.textContent = result.error
+      errSection.classList.remove('hidden')
+    } else {
+      errSection.classList.add('hidden')
+    }
+
+    document.getElementById('detail-content').classList.remove('hidden')
+  } catch {
+    document.getElementById('detail-loading').classList.add('hidden')
+    const el = document.getElementById('detail-fetch-error')
+    el.textContent = 'Could not reach the simulation service.'
+    el.classList.remove('hidden')
+  }
+}
+
+function closeAgentDetailModal() {
+  document.getElementById('agent-detail-modal').classList.add('hidden')
+}
+
+
+const dot  = document.getElementById('status-dot')
+const stxt = document.getElementById('status-text')
 
 function setStatus(cls, text) {
   dot.className = cls; stxt.textContent = text
-  dotDash.className = cls + ' ml-1'; stxtDash.textContent = text
 }
 
 async function fetchStats() {
-  if (!pollingActive) return
   try {
     const res = await fetch(`${API_BASE}/summary`)
     if (res.status === 404) {
-      pollingActive = false
-      setStatus('inline-block w-2 h-2 rounded-full bg-red-500', 'summary endpoint not found')
+      setStatus('inline-block w-2 h-2 rounded-full bg-amber-400', 'waiting for simulation…')
       return
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     updateStats(data)
-    setStatus('inline-block w-2 h-2 rounded-full bg-emerald-400', 'live')
+    setStatus('inline-block w-2 h-2 rounded-full bg-emerald-400', `live · ${new Date().toLocaleTimeString()}`)
   } catch {
     setStatus('inline-block w-2 h-2 rounded-full bg-amber-400', 'unreachable')
   }
 }
 
 async function fetchActivity() {
-  if (!pollingActive) return
   try {
     const limit = expanded ? 200 : 100
     const res = await fetch(`${API_BASE}/activity?limit=${limit}`)
@@ -687,13 +1083,32 @@ async function fetchActivity() {
     const data = await res.json()
     activityLog     = data.activity ?? []
     activitySummary = data.summary ?? { sleeping: 0, pending: 0, running: 0 }
+    if (data.totals) activityTotals = { ...activityTotals, ...data.totals }
     renderLog()
+  } catch { /* non-critical */ }
+}
+
+async function fetchAgentStates() {
+  try {
+    const res = await fetch(`${API_BASE}/agent-states`)
+    if (!res.ok) return
+    const data = await res.json()
+    agentStates = data.states ?? {}
   } catch { /* non-critical */ }
 }
 
 fetchStats()
 fetchActivity()
-setInterval(() => { fetchStats(); fetchActivity() }, 2000)
+fetchAgentRoles()
+fetchAgentStates()
+setInterval(() => {
+  fetchStats()
+  fetchActivity()
+  fetchAgentStates().then(() => {
+    if (currentTab === 'agents') renderAgentNarrativesCompact()
+  })
+  if (currentView === 'agents') { fetchAgentRoles(); renderAgentNarratives() }
+}, 2000)
 
 // Allow ?tab=transactions etc on load
 const initTab = params.get('tab')
@@ -859,11 +1274,13 @@ function switchView(view) {
   currentView = view
   document.getElementById('view-dashboard').classList.toggle('hidden', view !== 'dashboard')
   document.getElementById('view-analytics').classList.toggle('hidden', view !== 'analytics')
+  document.getElementById('view-agents').classList.toggle('hidden', view !== 'agents')
   const active   = 'text-sm px-3 py-1 rounded font-medium bg-white/20 text-white'
   const inactive = 'text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10'
-  document.getElementById('nav-dashboard').className = view === 'dashboard' ? active : inactive
   document.getElementById('nav-analytics').className = view === 'analytics'  ? active : inactive
+  document.getElementById('nav-agents').className    = view === 'agents'     ? active : inactive
   if (view === 'analytics') fetchMetrics()
+  if (view === 'agents') { fetchAgentRoles().then(renderAgentNarratives) }
 }
 
 async function fetchMetrics() {

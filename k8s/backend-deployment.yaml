@@ -29,7 +29,7 @@ spec:
               name: postgres-secret
               key: POSTGRES_PASSWORD
         - name: ConnectionStrings__DefaultConnection
-          value: "Host=postgres;Database=assetmanager;Username=postgres;Password=$(POSTGRES_PASSWORD)"
+          value: "Host=postgres;Database=transferstacker;Username=postgres;Password=$(POSTGRES_PASSWORD)"
         - name: ASPNETCORE_URLS
           value: "http://+:5001"
         readinessProbe:

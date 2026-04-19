@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # simulation_service_tool.py - Thin entry point (logic lives in simulation_service_tool/ package)
 

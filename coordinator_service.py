@@ -226,4 +226,4 @@ if __name__ == '__main__':
         if arg.startswith('--port='):
             port = int(arg.split('=')[1])
     print(f'[coordinator] starting on port {port}')
-    uvicorn.run(app, host='0.0.0.0', port=port)
+    uvicorn.run(app, host='0.0.0.0', port=port, access_log=False)

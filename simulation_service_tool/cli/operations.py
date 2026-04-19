@@ -7,7 +7,7 @@ import time
 import questionary
 
 from simulation_service_tool.cli.prompts import _prompt_go_back
-from simulation_service_tool.cli.watch import watch_agents
+from simulation_service_tool.cli.watch import watch_release_pods_kubectl
 from simulation_service_tool.services.api_client import call_service, check_service
 from simulation_service_tool.services.command_runner import run_cli_command
 from simulation_service_tool.services.direct_cleanup import (
@@ -19,7 +19,7 @@ from simulation_service_tool.services.direct_cleanup import (
     get_test_releases,
 )
 from simulation_service_tool.menus.ports import get_port_status, kill_port
-from simulation_service_tool.ui.display import render_status_summary
+from simulation_service_tool.ui.display import render_status_summary, show_loading_spinner
 from simulation_service_tool.ui.styles import custom_style
 from simulation_service_tool.ui.utils import clear_screen
 
@@ -64,50 +64,62 @@ def hard_reset(service_running):
         style=custom_style,
     ).ask()
     if not confirm:
-        print("\n[CANCELLED] Hard reset aborted.")
+        print("\n[33m[CANCELLED][0m Hard reset aborted.")
         _prompt_go_back()
         return
 
-    print("\n[INFO] Running hard reset...")
-    releases = _extract_preflight_releases(direct_preflight_check())
-    actions = []
+    print("\n[36m[INFO][0m Running hard reset...")
 
-    for release in releases:
-        result = direct_release_cleanup(release, dry_run=False)
-        actions.append((f"helm release {release}", result.get('error') or result.get('warning') or result.get('helm') or 'processed'))
+    def _do_reset(progress_callback=None):
+        progress = progress_callback or (lambda _: None)
+        _actions = []
+        progress("Checking for test releases...")
+        _releases = _extract_preflight_releases(direct_preflight_check())
+        for release in _releases:
+            progress(f"Uninstalling release: {release}...")
+            result = direct_release_cleanup(release, dry_run=False)
+            _actions.append((f"helm release {release}", result.get('error') or result.get('warning') or result.get('helm') or 'processed'))
+        progress("Running full cleanup...")
+        direct_full_cleanup(dry_run=False)
+        _actions.append(("full cleanup", 'completed'))
+        progress("Removing completed pods...")
+        _cc = direct_completed_pods_cleanup(dry_run=False)
+        _actions.append(("completed pods cleanup", _cc.get('error') or f"removed {_cc.get('count', 0)} completed pods"))
+        _cmds = [
+            ('kubectl delete statefulset playwright-agent', ['kubectl', 'delete', 'statefulset', 'playwright-agent', '--ignore-not-found']),
+            ('kubectl delete jobs -l app=playwright-agent', ['kubectl', 'delete', 'jobs', '-l', 'app=playwright-agent', '--ignore-not-found']),
+            (
+                'kubectl delete pods -l app=playwright-agent --force --grace-period=0',
+                ['kubectl', 'delete', 'pods', '-l', 'app=playwright-agent', '--force', '--grace-period=0', '--ignore-not-found'],
+            ),
+            ('kubectl delete pvc playwright-cache', ['kubectl', 'delete', 'pvc', 'playwright-cache', '--ignore-not-found']),
+            ('kubectl delete pdb playwright-agent-pdb', ['kubectl', 'delete', 'pdb', 'playwright-agent-pdb', '--ignore-not-found']),
+        ]
+        for title, args in _cmds:
+            progress(f"{title}...")
+            _r = _run_command(args)
+            _actions.append((title, _r.stdout.strip() or _r.stderr.strip() or 'processed'))
+        progress("Verifying cluster state...")
+        _state = direct_verify_state()
+        return {'actions': _actions, 'state': _state}
 
-    direct_full_cleanup(dry_run=False)
-    actions.append(("full cleanup", 'completed'))
-
-    completed_cleanup = direct_completed_pods_cleanup(dry_run=False)
-    actions.append(("completed pods cleanup", completed_cleanup.get('error') or f"removed {completed_cleanup.get('count', 0)} completed pods"))
-
-    reset_commands = [
-        ('kubectl delete statefulset playwright-agent', ['kubectl', 'delete', 'statefulset', 'playwright-agent', '--ignore-not-found']),
-        ('kubectl delete jobs -l app=playwright-agent', ['kubectl', 'delete', 'jobs', '-l', 'app=playwright-agent', '--ignore-not-found']),
-        (
-            'kubectl delete pods -l app=playwright-agent --force --grace-period=0',
-            ['kubectl', 'delete', 'pods', '-l', 'app=playwright-agent', '--force', '--grace-period=0', '--ignore-not-found'],
-        ),
-        ('kubectl delete pvc playwright-cache', ['kubectl', 'delete', 'pvc', 'playwright-cache', '--ignore-not-found']),
-        ('kubectl delete pdb playwright-agent-pdb', ['kubectl', 'delete', 'pdb', 'playwright-agent-pdb', '--ignore-not-found']),
-    ]
-    for title, args in reset_commands:
-        result = _run_command(args)
-        actions.append((title, result.stdout.strip() or result.stderr.strip() or 'processed'))
-
-    state = direct_verify_state()
-    print("\n[OK] Hard reset complete.")
+    reset_result = show_loading_spinner(_do_reset, message="Running hard reset...", timeout=90)
+    if reset_result is None:
+        _prompt_go_back('Return to dashboard')
+        return
+    actions = reset_result['actions']
+    state = reset_result['state']
+    print("\n[32m[OK][0m Hard reset complete.")
     for title, outcome in actions[:12]:
         print(f"   - {title}: {outcome}")
     if len(actions) > 12:
         print(f"   ... and {len(actions) - 12} more actions")
 
     if state.get('is_clean'):
-        print("\n[OK] Cluster is clean and ready.")
+        print("\n[32m[OK][0m Cluster is clean and ready.")
     else:
         print(
-            f"\n[WARN] Remaining resources detected: releases={state.get('helm_test_releases', '?')}, "
+            f"\n[33m[WARN][0m Remaining resources detected: releases={state.get('helm_test_releases', '?')}, "
             f"pods={state.get('playwright_pods', '?')}, pvcs={state.get('playwright_pvcs', '?')}, pdbs={state.get('conflicting_pdbs', '?')}"
         )
 
@@ -175,7 +187,7 @@ def stop_test_menu(service_running):
 
     tests = _get_active_tests(service_running)
     if not tests:
-        print("\n  [OK] No active tests found.")
+        print("\n  [32m[OK][0m No active tests found.")
         _prompt_go_back()
         return
 
@@ -233,22 +245,37 @@ def stop_test_menu(service_running):
         return
 
     print()
-    successes = []
-    failures = []
-    for release_name in selected_names:
-        print(f"Stopping: {release_name}")
-        result = _stop_release(service_running, release_name)
-        if result.get('success') or result.get('helm') == 'uninstalled':
-            successes.append(release_name)
-            continue
-        warning = result.get('warning')
-        error = result.get('error') or warning or 'Unknown stop error'
-        failures.append((release_name, error))
+
+    def _do_stop_batch(progress_callback=None):
+        progress = progress_callback or (lambda _: None)
+        _successes = []
+        _failures = []
+        for release_name in selected_names:
+            progress(f"Stopping {release_name}...")
+            result = _stop_release(service_running, release_name)
+            if result.get('success') or result.get('helm') == 'uninstalled':
+                _successes.append(release_name)
+            else:
+                warning = result.get('warning')
+                error = result.get('error') or warning or 'Unknown stop error'
+                _failures.append((release_name, error))
+        return {'successes': _successes, 'failures': _failures}
+
+    stop_result = show_loading_spinner(
+        _do_stop_batch,
+        message=f"Stopping {len(selected_names)} test{'s' if len(selected_names) != 1 else ''}...",
+        timeout=60,
+    )
+    if stop_result is None:
+        _prompt_go_back()
+        return
+    successes = stop_result['successes']
+    failures = stop_result['failures']
 
     if successes:
-        print(f"\n[OK] Stopped {len(successes)} test{'s' if len(successes) != 1 else ''}: {', '.join(successes)}")
+        print(f"\n[32m[OK][0m Stopped {len(successes)} test{'s' if len(successes) != 1 else ''}: {', '.join(successes)}")
     if failures:
-        print("[WARN] Some tests could not be stopped:")
+        print("[33m[WARN][0m Some tests could not be stopped:")
         for release_name, error in failures:
             print(f"   - {release_name}: {error}")
 
@@ -263,7 +290,11 @@ def list_tests(service_running):
 def watch_progress(service_running):
     clear_screen()
     if service_running:
-        tests = call_service('/api/simulation/tests')
+        def _fetch_tests(progress_callback=None):
+            (progress_callback or (lambda _: None))("Fetching active tests from service...")
+            return call_service('/api/simulation/tests')
+
+        tests = show_loading_spinner(_fetch_tests, message="Loading tests...")
         if isinstance(tests, list) and tests:
             choices = [questionary.Choice(title=test['name'], value=test['name']) for test in tests]
             choices.append(questionary.Separator())
@@ -276,22 +307,23 @@ def watch_progress(service_running):
             ).ask()
             if release == "__back__":
                 return
-            watch_agents(release, service_running)
+            watch_release_pods_kubectl(release)
         else:
             print("\n  No running tests found.")
             _prompt_go_back()
     else:
-        watch_agents(None, service_running)
+        print("\n  Service offline — start a test first, then use kubectl watch.")
+        _prompt_go_back()
 
 
 def start_service():
     port_status = get_port_status('5002')
     if port_status.get('error'):
-        print(f"\n[WARN] Could not inspect port 5002: {port_status['error']}")
+        print(f"\n[33m[WARN][0m Could not inspect port 5002: {port_status['error']}")
 
     if port_status.get('in_use'):
         primary = port_status['processes'][0]
-        print("\n[WARN] Port 5002 is already in use.")
+        print("\n[33m[WARN][0m Port 5002 is already in use.")
         print(f"   Listener: {primary['command']} (PID {primary['pid']})")
 
         choices = []
@@ -312,23 +344,32 @@ def start_service():
         if action == "cancel" or not action:
             return
         if action == "reuse":
-            print("\n[OK] Using the existing simulation service.")
+            print("\n[32m[OK][0m Using the existing simulation service.")
             _prompt_go_back()
             return
         if action == "restart":
             kill_result = kill_port('5002')
             if kill_result.get('failed_pids'):
-                print(f"\n[WARN] Could not release port 5002 from PIDs: {', '.join(kill_result['failed_pids'])}")
+                print(f"\n[33m[WARN][0m Could not release port 5002 from PIDs: {', '.join(kill_result['failed_pids'])}")
                 _prompt_go_back()
                 return
             time.sleep(0.5)
 
     print("\nStarting simulation service...")
     subprocess.Popen([sys.executable, "simulation_service.py", "server", "--port", "5002"])
-    print("   Service starting on http://localhost:5002")
-    time.sleep(2)
-    if check_service():
-        print("   [OK] Service is reachable.")
+
+    def _wait_for_service(progress_callback=None):
+        progress = progress_callback or (lambda _: None)
+        for attempt in range(1, 7):
+            progress(f"Waiting for service (attempt {attempt}/6)...")
+            time.sleep(0.5)
+            if check_service():
+                return True
+        return False
+
+    online = show_loading_spinner(_wait_for_service, message="Starting service on http://localhost:5002...", timeout=10)
+    if online:
+        print("   [32m[OK][0m Service is reachable.")
     else:
-        print("   [WARN] Service did not respond yet. Check Diagnostics -> Service Health.")
+        print("   [33m[WARN][0m Service did not respond yet. Check Diagnostics -> Service Health.")
     _prompt_go_back()

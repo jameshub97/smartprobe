@@ -18,7 +18,6 @@ from simulation_service_tool.cli.prompts import (  # noqa: F401
     _prompt_go_back,
 )
 from simulation_service_tool.cli.watch import (  # noqa: F401
-    watch_agents,
     watch_release_pods_kubectl,
 )
 from simulation_service_tool.cli.workload_guidance import (  # noqa: F401
@@ -46,6 +45,7 @@ from simulation_service_tool.cli.pod_diagnostics import (  # noqa: F401
     show_active_pods_summary,
     show_stale_pod_summary,
     show_active_ports_summary,
+    view_agent_logs,
     _pick_debug_pod,
     _get_pod_logs_output,
     _get_owner_kind,

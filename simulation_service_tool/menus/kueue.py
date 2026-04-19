@@ -25,21 +25,35 @@ def _prompt_go_back():
     ).ask()
 
 
+def _load_kueue_state(progress_callback=None):
+    progress = progress_callback or (lambda _: None)
+    progress("Checking Kueue CRDs...")
+    installed = is_kueue_installed()
+    cq = lq = None
+    if installed:
+        progress("Loading ClusterQueue status...")
+        cq = get_cluster_queue_status()
+        progress("Loading LocalQueue status...")
+        lq = get_local_queue_status()
+    return {'installed': installed, 'cq': cq or {}, 'lq': lq or {}}
+
+
 def kueue_menu():
     """Interactive Kueue sub-menu."""
     while True:
         clear_screen()
-        print("+" + "=" * 62 + "+")
-        print("|              KUEUE (Workload Queuing)                        |")
-        print("+" + "=" * 62 + "+")
 
-        installed = is_kueue_installed()
+        state = show_loading_spinner(_load_kueue_state, message="Loading Kueue status...")
+        if state is None:
+            return
+        installed = state['installed']
+        cq = state['cq']
+        lq = state['lq']
+
         status_label = "[OK] Installed" if installed else "[--] Not installed"
         print(f"\n  Kueue CRDs: {status_label}")
 
         if installed:
-            cq = get_cluster_queue_status()
-            lq = get_local_queue_status()
             if cq.get("exists"):
                 rows = [
                     ("Pending workloads", str(cq["pending_workloads"])),
@@ -115,7 +129,7 @@ def _show_workloads():
     print("|              KUEUE WORKLOADS                                 |")
     print("+" + "=" * 62 + "+")
 
-    workloads = show_loading_spinner("Fetching workloads...", list_workloads)
+    workloads = show_loading_spinner(list_workloads, message="Fetching workloads...")
     if not workloads:
         print("\n  No workloads found.")
     else:

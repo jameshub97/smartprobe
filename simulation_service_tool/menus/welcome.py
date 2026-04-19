@@ -57,6 +57,7 @@ from simulation_service_tool.cli.commands import (
     list_tests,
     watch_progress,
     start_service,
+    view_agent_logs,
 )
 from simulation_service_tool.menus.cleanup import cleanup_menu
 from simulation_service_tool.menus.presets import show_presets
@@ -89,38 +90,40 @@ def welcome_menu():
         if not cluster_initialized and needs_cleanup:
             # Not initialized + dirty cluster: prompt init first
             choices = [
-                "1) Initialize Cluster (recommended)",
-                "2) Start a Test",
-                "3) Watch Progress",
+                questionary.Choice("Initialize Cluster (recommended)", value="init"),
+                questionary.Choice("Start a Test", value="start_test"),
+                questionary.Choice("Watch Progress", value="watch"),
+                questionary.Choice("Agent Logs", value="logs"),
                 questionary.Separator(),
-                "4) Cleanup Center",
-                "5) Start Service",
-                "6) Docker Compose",
-                "7) Monitoring",
-                "8) Kueue",
-                "9) Diagnostics",
+                questionary.Choice("Cleanup Center", value="cleanup"),
+                questionary.Choice("Start Service", value="service"),
+                questionary.Choice("Docker Compose", value="docker"),
+                questionary.Choice("Monitoring", value="monitoring"),
+                questionary.Choice("Kueue", value="kueue"),
+                questionary.Choice("Diagnostics", value="diagnostics"),
                 questionary.Separator(),
-                "K) Kill All Pods",
+                questionary.Choice("Kill All Pods", value="kill"),
                 questionary.Separator(),
-                "0) Exit",
+                questionary.Choice("Exit", value="exit"),
             ]
         elif not cluster_initialized:
             # Not initialized but looks clean
             choices = [
-                "1) Start a Test",
-                "2) Watch Progress",
-                "3) Show Presets",
+                questionary.Choice("Start a Test", value="start_test"),
+                questionary.Choice("Watch Progress", value="watch"),
+                questionary.Choice("Agent Logs", value="logs"),
+                questionary.Choice("Show Presets", value="presets"),
                 questionary.Separator(),
-                "4) Start Service",
-                "5) Docker Compose",
-                "6) Initialize Cluster",
-                "7) Monitoring",
-                "8) Kueue",
-                "9) Diagnostics",
+                questionary.Choice("Start Service", value="service"),
+                questionary.Choice("Docker Compose", value="docker"),
+                questionary.Choice("Initialize Cluster", value="init"),
+                questionary.Choice("Monitoring", value="monitoring"),
+                questionary.Choice("Kueue", value="kueue"),
+                questionary.Choice("Diagnostics", value="diagnostics"),
                 questionary.Separator(),
-                "K) Kill All Pods",
+                questionary.Choice("Kill All Pods", value="kill"),
                 questionary.Separator(),
-                "0) Exit",
+                questionary.Choice("Exit", value="exit"),
             ]
         else:
             # Initialized — run drift detection
@@ -138,39 +141,41 @@ def welcome_menu():
 
             if actionable_drift:
                 choices = [
-                    "1) Fix All Drift Issues (recommended)",
-                    "2) Start a Test",
-                    "3) Stop a Test",
-                    "4) Watch Progress",
+                    questionary.Choice("Fix All Drift Issues (recommended)", value="fix_drift"),
+                    questionary.Choice("Start a Test", value="start_test"),
+                    questionary.Choice("Stop a Test", value="stop_test"),
+                    questionary.Choice("Watch Progress", value="watch"),
+                    questionary.Choice("Agent Logs", value="logs"),
                     questionary.Separator(),
-                    "5) Start Service",
-                    "6) Docker Compose",
-                    "7) Monitoring",
-                    "8) Kueue",
-                    "9) Diagnostics",
+                    questionary.Choice("Start Service", value="service"),
+                    questionary.Choice("Docker Compose", value="docker"),
+                    questionary.Choice("Monitoring", value="monitoring"),
+                    questionary.Choice("Kueue", value="kueue"),
+                    questionary.Choice("Diagnostics", value="diagnostics"),
                     questionary.Separator(),
-                    "K) Kill All Pods",
+                    questionary.Choice("Kill All Pods", value="kill"),
                     questionary.Separator(),
-                    "0) Exit",
+                    questionary.Choice("Exit", value="exit"),
                 ]
             else:
                 # Initialized, no actionable drift — clean, streamlined menu
                 choices = [
-                    "1) Start a Test",
-                    "2) Stop a Test",
-                    "3) Watch Progress",
-                    "4) Show Presets",
+                    questionary.Choice("Start a Test", value="start_test"),
+                    questionary.Choice("Stop a Test", value="stop_test"),
+                    questionary.Choice("Watch Progress", value="watch"),
+                    questionary.Choice("Agent Logs", value="logs"),
+                    questionary.Choice("Show Presets", value="presets"),
                     questionary.Separator(),
-                    "5) Start Service",
-                    "6) Docker Compose",
-                    "7) Initialize Cluster",
-                    "8) Monitoring",
-                    "9) Kueue",
-                    "10) Diagnostics",
+                    questionary.Choice("Start Service", value="service"),
+                    questionary.Choice("Docker Compose", value="docker"),
+                    questionary.Choice("Initialize Cluster", value="init"),
+                    questionary.Choice("Monitoring", value="monitoring"),
+                    questionary.Choice("Kueue", value="kueue"),
+                    questionary.Choice("Diagnostics", value="diagnostics"),
                     questionary.Separator(),
-                    "K) Kill All Pods",
+                    questionary.Choice("Kill All Pods", value="kill"),
                     questionary.Separator(),
-                    "0) Exit",
+                    questionary.Choice("Exit", value="exit"),
                 ]
         try:
             choice = questionary.select(
@@ -182,11 +187,7 @@ def welcome_menu():
             print("\nGoodbye!")
             return
 
-        if choice is None:
-            # questionary returns None on Ctrl+C or terminal issues
-            print("\nGoodbye!")
-            return
-        if choice.startswith('0'):
+        if choice is None or choice == 'exit':
             print("\nGoodbye!")
             return
         _handle_welcome_choice(
@@ -196,73 +197,23 @@ def welcome_menu():
 
 
 def _handle_welcome_choice(choice, service_running, cluster_initialized, needs_cleanup, drift_findings=None):
-    option = choice.split(')')[0].strip()
-    # Mirror the same actionable-drift check used when building choices above.
-    has_drift = bool(
-        drift_findings
-        and get_drift_banner(drift_findings)
-        and any(f.get('action') for f in drift_findings)
-    )
-
-    if not cluster_initialized and needs_cleanup:
-        # Menu layout: 1=Init, 2=Start, 3=Watch, 4=Cleanup, 5=Service, 6=Docker, 7=Monitoring, 8=Kueue, 9=Diag
-        actions = {
-            '1': lambda: initialize_cluster_menu(),
-            '2': lambda: start_test_menu(service_running),
-            '3': lambda: watch_progress(service_running),
-            '4': lambda: cleanup_menu(),
-            '5': lambda: start_service(),
-            '6': lambda: docker_menu(),
-            '7': lambda: monitoring_menu(),
-            '8': lambda: kueue_menu(),
-            '9': lambda: diagnostics_menu(service_running),
-            'K': lambda: _kill_switch_action(),
-        }
-    elif not cluster_initialized:
-        # Menu layout: 1=Start, 2=Watch, 3=Presets, 4=Service, 5=Docker, 6=Init, 7=Monitoring, 8=Kueue, 9=Diag
-        actions = {
-            '1': lambda: start_test_menu(service_running),
-            '2': lambda: watch_progress(service_running),
-            '3': lambda: show_presets(),
-            '4': lambda: start_service(),
-            '5': lambda: docker_menu(),
-            '6': lambda: initialize_cluster_menu(),
-            '7': lambda: monitoring_menu(),
-            '8': lambda: kueue_menu(),
-            '9': lambda: diagnostics_menu(service_running),
-            'K': lambda: _kill_switch_action(),
-        }
-    elif has_drift:
-        # Menu layout: 1=FixDrift, 2=Start, 3=Stop, 4=Watch, 5=Service, 6=Docker, 7=Monitoring, 8=Kueue, 9=Diag
-        actions = {
-            '1': lambda: _fix_drift(drift_findings, service_running),
-            '2': lambda: start_test_menu(service_running),
-            '3': lambda: stop_test_menu(service_running),
-            '4': lambda: watch_progress(service_running),
-            '5': lambda: start_service(),
-            '6': lambda: docker_menu(),
-            '7': lambda: monitoring_menu(),
-            '8': lambda: kueue_menu(),
-            '9': lambda: diagnostics_menu(service_running),
-            'K': lambda: _kill_switch_action(),
-        }
-    else:
-        # Menu layout: 1=Start, 2=Stop, 3=Watch, 4=Presets, 5=Service, 6=Docker, 7=Init, 8=Monitoring, 9=Kueue, 10=Diag
-        actions = {
-            '1': lambda: start_test_menu(service_running),
-            '2': lambda: stop_test_menu(service_running),
-            '3': lambda: watch_progress(service_running),
-            '4': lambda: show_presets(),
-            '5': lambda: start_service(),
-            '6': lambda: docker_menu(),
-            '7': lambda: initialize_cluster_menu(),
-            '8': lambda: monitoring_menu(),
-            '9': lambda: kueue_menu(),
-            '10': lambda: diagnostics_menu(service_running),
-            'K': lambda: _kill_switch_action(),
-        }
-
-    action = actions.get(option)
+    actions = {
+        'init':        lambda: initialize_cluster_menu(),
+        'start_test':  lambda: start_test_menu(service_running),
+        'stop_test':   lambda: stop_test_menu(service_running),
+        'watch':       lambda: watch_progress(service_running),
+        'logs':        lambda: view_agent_logs(),
+        'presets':     lambda: show_presets(),
+        'cleanup':     lambda: cleanup_menu(),
+        'service':     lambda: start_service(),
+        'docker':      lambda: docker_menu(),
+        'monitoring':  lambda: monitoring_menu(),
+        'kueue':       lambda: kueue_menu(),
+        'diagnostics': lambda: diagnostics_menu(service_running),
+        'kill':        lambda: _kill_switch_action(),
+        'fix_drift':   lambda: _fix_drift(drift_findings, service_running),
+    }
+    action = actions.get(choice)
     if action:
         action()
 
@@ -410,28 +361,27 @@ def test_operations_menu(service_running):
         choice = questionary.select(
             "Test operations",
             choices=[
-                "1) Start a Test",
-                "2) Stop a Test",
-                "3) List Tests",
-                "4) Watch Progress",
-                "5) Show Presets",
+                questionary.Choice("Start a Test", value="start_test"),
+                questionary.Choice("Stop a Test", value="stop_test"),
+                questionary.Choice("List Tests", value="list"),
+                questionary.Choice("Watch Progress", value="watch"),
+                questionary.Choice("Show Presets", value="presets"),
                 questionary.Separator(),
-                "0) Back",
+                questionary.Choice("Back", value="back"),
             ],
             style=custom_style,
         ).ask()
 
-        if not choice or choice.startswith('0'):
+        if not choice or choice == 'back':
             return
 
-        option = choice.split(')')[0]
-        if option == '1':
+        if choice == 'start_test':
             start_test_menu(service_running)
-        elif option == '2':
+        elif choice == 'stop_test':
             stop_test_menu(service_running)
-        elif option == '3':
+        elif choice == 'list':
             list_tests(service_running)
-        elif option == '4':
+        elif choice == 'watch':
             watch_progress(service_running)
-        elif option == '5':
+        elif choice == 'presets':
             show_presets()

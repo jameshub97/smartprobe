@@ -30,8 +30,11 @@ parallelism: 20
 shardTotal: 10
 workersPerPod: 10
 backoffLimit: 2
-ttlSecondsAfterFinished: 60
+ttlSecondsAfterFinished: 3600
 commandOverride: ""
+
+statefulset:
+  enabled: false
 
 sharedCache:
   enabled: false

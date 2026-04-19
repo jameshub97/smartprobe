@@ -280,12 +280,12 @@ def _print_text_block(title, text, max_lines=120, prompt_after=True):
     lines = [line.rstrip() for line in (text or '').splitlines()]
     if max_lines and len(lines) > max_lines:
         lines = lines[-max_lines:]
-        print(f"[INFO] Showing the last {max_lines} lines.\n")
+        print(f"[36m[INFO][0m Showing the last {max_lines} lines.\n")
     if lines:
         for line in lines:
             print(line)
     else:
-        print("[WARN] No output available.")
+        print("[33m[WARN][0m No output available.")
     print()
     if prompt_after:
         _prompt_go_back("Return to diagnostic actions")

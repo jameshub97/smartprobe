@@ -30,7 +30,7 @@ Entry point: ``interactive_menu()``
      Full parallel probe table — all seven checks run concurrently:
        Simulation service  HTTP GET http://localhost:5002/health
        Backend API         HTTP GET http://localhost:5001/health
-       Frontend            HTTP GET http://localhost:3000/
+       Transfer Stacker    HTTP GET http://localhost:5173/
        PostgreSQL          TCP connect localhost:5432
        Docker API          smart_diagnostics._docker_running()
        Cluster runtime     k8s_connectivity.cluster_runtime_status()
@@ -130,7 +130,7 @@ def _cluster_runtime_status() -> str:
 _CHECKS = [
     ("Simulation service",  lambda: _http_status("http://localhost:5002/health")),
     ("Backend API",         lambda: _http_status("http://localhost:5001/health")),
-    ("Frontend",            lambda: _http_status("http://localhost:3000/")),
+    ("Transfer Stacker",    lambda: _http_status("http://localhost:5173/")),
     ("PostgreSQL",          lambda: "reachable" if _tcp_reachable("localhost", 5432) else "unreachable"),
     ("Docker API",          _docker_api_status),
     ("Cluster runtime",     _cluster_runtime_status),
@@ -246,7 +246,7 @@ def _early_api_check() -> bool:
         from simulation_service_tool.services.smart_diagnostics import _restart_service
         print(f"\n  Starting simulation service...")
         success, detail = _restart_service()
-        status = f"{green}[OK]{reset}" if success else f"{yellow}[WARN]{reset}"
+        status = f"\033[32m[OK]\033[0m" if success else f"\033[33m[WARN]\033[0m"
         print(f"  {status} {detail}\n")
     elif not action:
         return False
@@ -435,9 +435,20 @@ def _run_startup_diagnostics() -> tuple:
 
 
 def _open_dashboard():
-    """Open the simulation dashboard in the default browser."""
-    import webbrowser
-    webbrowser.open("http://localhost:5002")
+    """Prompt user to open the simulation dashboard in the browser."""
+    import questionary
+    from simulation_service_tool.ui.styles import custom_style
+    choice = questionary.select(
+        "Dashboard is ready at http://localhost:5002",
+        choices=[
+            questionary.Choice("Open in browser", value="open"),
+            questionary.Choice("Continue to CLI", value="skip"),
+        ],
+        style=custom_style,
+    ).ask()
+    if choice == "open":
+        import webbrowser
+        webbrowser.open("http://localhost:5002")
 
 
 def interactive_menu():

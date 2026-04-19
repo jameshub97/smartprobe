@@ -8,7 +8,6 @@ try:
     from rich import box
     from rich.console import Console, Group
     from rich.panel import Panel
-    from rich.progress_bar import ProgressBar
     from rich.table import Table
     from rich.text import Text
 
@@ -331,12 +330,42 @@ def render_welcome_menu(service_running, overview=None):
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style="cyan")
     summary.add_column(style="white")
-    summary.add_row("Service", "Running" if service_running else "Offline")
-    summary.add_row("Active pods", active_pods_label)
-    summary.add_row("Healthy pods", "pending" if pods_pending else (f"[red]{healthy_pods}[/red]" if unhealthy_pods else str(healthy_pods)))
-    summary.add_row("Active ports", str(active_ports))
-    summary.add_row("Orphaned", orphaned_label)
-    summary.add_row("Stale pod", stale_status)
+
+    service_val = "[bold green]Running[/bold green]" if service_running else "[bold red]Offline[/bold red]"
+    summary.add_row("Service", service_val)
+
+    pods_val = "[dim]pending[/dim]" if pods_pending else (
+        f"[yellow]{active_pods}[/yellow]" if active_pods == 0 else f"[green]{active_pods}[/green]"
+    )
+    summary.add_row("Active pods", pods_val)
+
+    if pods_pending:
+        healthy_val = "[dim]pending[/dim]"
+    elif unhealthy_pods:
+        healthy_val = f"[red]{healthy_pods}[/red]"
+    else:
+        healthy_val = f"[green]{healthy_pods}[/green]"
+    summary.add_row("Healthy pods", healthy_val)
+
+    ports_count = len(active_ports) if isinstance(active_ports, list) else int(active_ports or 0)
+    ports_val = f"[cyan]{ports_count}[/cyan]" if ports_count else "[dim]0[/dim]"
+    summary.add_row("Active ports", ports_val)
+
+    if preflight_pending:
+        orphaned_val = "[dim]not loaded yet[/dim]"
+    elif orphaned_count:
+        orphaned_val = f"[yellow]{orphaned_label}[/yellow]"
+    else:
+        orphaned_val = "[green]none detected[/green]"
+    summary.add_row("Orphaned", orphaned_val)
+
+    if stale_pending:
+        stale_val = "[dim]not loaded yet[/dim]"
+    elif stale_info.get('is_stale'):
+        stale_val = "[yellow]stale pod detected[/yellow]"
+    else:
+        stale_val = "[green]no stale pod detected[/green]"
+    summary.add_row("Stale pod", stale_val)
 
     subtitle = Text("Run Routine Checks for a full cluster scan before entering test actions", style="dim")
     warning = None
@@ -519,105 +548,6 @@ def render_status_summary(service_running, payload):
         table.add_row("Conflicting PDBs", str(payload.get('conflicting_pdbs', '?')))
         title = "Direct Cluster Status"
     console.print(Panel(table, title=title, border_style="bright_blue", box=box.ROUNDED, padding=(1, 2)))
-
-
-def render_watch_dashboard(release_name, total, success, running, failed, pending, pod_logs=None):
-    if not RICH_AVAILABLE:
-        return False
-
-    header = Text(f"Watching {release_name or 'all tests'}", style="bold cyan")
-    if total > 0:
-        completed = success + failed
-        progress = (completed / total) * 100
-        progress_bar = ProgressBar(total=100, completed=int(progress), width=40)
-
-        table = Table(box=box.SIMPLE_HEAVY)
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", justify="right")
-        table.add_row("Total", str(total))
-        table.add_row("Succeeded", f"[green]{success}[/green]")
-        table.add_row("Running", f"[yellow]{running}[/yellow]")
-        table.add_row("Failed", f"[red]{failed}[/red]")
-        table.add_row("Pending", str(pending))
-
-        status = "Complete" if completed == total and failed == 0 else f"Complete ({failed} failed)" if completed == total else "In progress"
-        status_text = Text(status, style="bold green" if completed == total and failed == 0 else "bold yellow" if completed < total else "bold red")
-        content = Group(header, Text(), progress_bar, Text(f"{progress:.1f}% complete", style="dim"), Text(), table, Text(), status_text)
-    else:
-        content = Group(header, Text(), Text("Waiting for agents to start...", style="yellow"))
-
-    console.print(Panel(content, title="Agent Progress", border_style="bright_blue", box=box.ROUNDED, padding=(1, 2)))
-
-    if pod_logs:
-        log_parts = []
-        for pod_name, lines in pod_logs[:3]:
-            log_parts.append(Text(pod_name, style="bold cyan"))
-            for line in lines[-4:]:
-                log_parts.append(Text(line[:120], style="dim"))
-            log_parts.append(Text())
-        if log_parts and isinstance(log_parts[-1], Text) and not log_parts[-1].plain:
-            log_parts.pop()
-        console.print(Panel(Group(*log_parts), title="Live Activity", border_style="dim", box=box.ROUNDED, padding=(1, 2)))
-
-    return True
-
-
-def build_watch_renderable(release_name, total, success, running, failed, pending, pod_logs=None, stale_seconds=0):
-    """Build a Rich renderable for the watch dashboard (used with Rich Live)."""
-    if not RICH_AVAILABLE:
-        return None
-
-    header = Text(f"Watching {release_name or 'all tests'}", style="bold cyan")
-    parts = [header, Text()]
-
-    if total > 0:
-        completed = success + failed
-        progress = (completed / total) * 100
-        progress_bar = ProgressBar(total=100, completed=int(progress), width=40)
-
-        table = Table(box=box.SIMPLE_HEAVY)
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", justify="right")
-        table.add_row("Total", str(total))
-        table.add_row("Succeeded", f"[green]{success}[/green]")
-        table.add_row("Running", f"[yellow]{running}[/yellow]")
-        table.add_row("Failed", f"[red]{failed}[/red]")
-        table.add_row("Pending", str(pending))
-
-        if completed == total and failed == 0:
-            status_text = Text("Complete", style="bold green")
-        elif completed == total:
-            status_text = Text(f"Complete ({failed} failed)", style="bold red")
-        else:
-            status_text = Text("In progress", style="bold yellow")
-
-        parts.extend([progress_bar, Text(f"{progress:.1f}% complete", style="dim"), Text(), table, Text(), status_text])
-
-        if stale_seconds > 30 and running == 0 and pending == 0 and completed < total:
-            parts.append(Text())
-            parts.append(Text(f"No progress for {int(stale_seconds)}s — 0 running/pending pods", style="bold red"))
-            parts.append(Text("Watch will auto-exit shortly. Agents may need cluster scaling.", style="dim"))
-    else:
-        parts.append(Text("Waiting for agents to start...", style="yellow"))
-
-    parts.append(Text())
-    parts.append(Text("Ctrl+C to stop watching", style="dim"))
-
-    main_panel = Panel(Group(*parts), title="Agent Progress", border_style="bright_blue", box=box.ROUNDED, padding=(1, 2))
-
-    if pod_logs:
-        log_parts = []
-        for pod_name, lines in pod_logs[:3]:
-            log_parts.append(Text(pod_name, style="bold cyan"))
-            for line in lines[-4:]:
-                log_parts.append(Text(line[:120], style="dim"))
-            log_parts.append(Text())
-        if log_parts and isinstance(log_parts[-1], Text) and not log_parts[-1].plain:
-            log_parts.pop()
-        log_panel = Panel(Group(*log_parts), title="Live Activity", border_style="dim", box=box.ROUNDED, padding=(1, 2))
-        return Group(main_panel, log_panel)
-
-    return main_panel
 
 
 def display_cleanup_result(result, dry_run):

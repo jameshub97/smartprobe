@@ -28,7 +28,7 @@ def should_fallback_to_direct(error_message):
 def fallback_info_lines(message, error_message, endpoint_label):
     endpoint = endpoint_label or 'service operation'
     lines = [
-        '[INFO] Fallback Details',
+        '[36m[INFO][0m Fallback Details',
         '========================================',
         '',
         'Why this happened:',
@@ -130,12 +130,12 @@ def clear_hung_api_listeners_before_preflight(service_running: bool, *, cleanup_
     cleanup = cleanup_fn(restart_simulation=False)
 
     if cleanup.get('released_ports'):
-        print_fn(f"[INFO] Cleared hung API listeners before preflight: {cleanup['detail']}")
+        print_fn(f"[36m[INFO][0m Cleared hung API listeners before preflight: {cleanup['detail']}")
     if cleanup.get('failures'):
-        print_fn(f"[WARN] Hung API cleanup before preflight was incomplete: {cleanup['detail']}")
+        print_fn(f"[33m[WARN][0m Hung API cleanup before preflight was incomplete: {cleanup['detail']}")
 
     if '5002' in cleanup.get('released_ports', []):
-        print_fn("[INFO] Simulation service listener was reset. Falling back to direct preflight checks.")
+        print_fn("[36m[INFO][0m Simulation service listener was reset. Falling back to direct preflight checks.")
         return False
 
     return service_running

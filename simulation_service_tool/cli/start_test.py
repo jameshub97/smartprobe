@@ -12,7 +12,7 @@ from simulation_service_tool.cli.preflight import (
     _handle_start_error_recovery,
 )
 from simulation_service_tool.cli.prompts import _prompt_advanced_test_options, _prompt_go_back
-from simulation_service_tool.cli.watch import watch_agents, watch_release_pods_kubectl
+from simulation_service_tool.cli.watch import watch_release_pods_kubectl
 from simulation_service_tool.menus.presets import get_preset_config
 from simulation_service_tool.services.api_client import call_service
 from simulation_service_tool.ui.styles import custom_style
@@ -22,9 +22,6 @@ from simulation_service_tool.ui.utils import clear_screen
 def start_test_menu(service_running):
     """Start a test with preset or custom configuration."""
     clear_screen()
-    print("+" + "=" * 62 + "+")
-    print("|                        START A TEST                          |")
-    print("+" + "=" * 62 + "+")
     method = questionary.select(
         "How would you like to configure the test?",
         choices=[
@@ -137,28 +134,28 @@ def start_test_menu(service_running):
         print("   Kueue queuing: enabled")
     confirm = questionary.confirm("Start this test?", default=True).ask()
     if not confirm:
-        print("[CANCELLED]")
+        print("[33m[CANCELLED][0m")
         _prompt_go_back()
         return
     print(f"\nStarting test: {name}")
     if service_running:
-        print("[INFO] Probing service health...")
+        print("[36m[INFO][0m Probing service health...")
         from simulation_service_tool.services.api_client import check_service
         if not check_service():
-            print("[WARN] Simulation service is not responding. Preflight will fall back to direct mode.")
+            print("[33m[WARN][0m Simulation service is not responding. Preflight will fall back to direct mode.")
             service_running = False
 
         if service_running:
-            print("[INFO] Running preflight conflict check via service API...")
+            print("[36m[INFO][0m Running preflight conflict check via service API...")
         else:
-            print("[INFO] Running preflight conflict check via kubectl...")
+            print("[36m[INFO][0m Running preflight conflict check via kubectl...")
         preflight = _get_preflight(service_running)
         if preflight.get('cancelled'):
-            print("[CANCELLED] Preflight check was cancelled.")
+            print("[33m[CANCELLED][0m Preflight check was cancelled.")
             _prompt_go_back()
             return
         if preflight.get('error'):
-            print(f"[WARN] Could not run preflight checks: {preflight['error']}")
+            print(f"[33m[WARN][0m Could not run preflight checks: {preflight['error']}")
             action = questionary.select(
                 "How would you like to proceed?",
                 choices=[
@@ -170,19 +167,19 @@ def start_test_menu(service_running):
             ).ask()
             if action == "start_service":
                 from simulation_service_tool.services.smart_diagnostics import _restart_service
-                print("[INFO] Starting simulation service...")
+                print("[36m[INFO][0m Starting simulation service...")
                 success, detail = _restart_service()
-                print(f"{'[OK]' if success else '[WARN]'} {detail}")
+                print(f"{'[32m[OK][0m' if success else '[33m[WARN][0m'} {detail}")
                 if success:
-                    print("[INFO] Retrying preflight check...")
+                    print("[36m[INFO][0m Retrying preflight check...")
                     service_running = True
                     preflight = _get_preflight(service_running)
                     if preflight.get('cancelled'):
-                        print("[CANCELLED] Preflight check was cancelled.")
+                        print("[33m[CANCELLED][0m Preflight check was cancelled.")
                         _prompt_go_back()
                         return
                     if preflight.get('error'):
-                        print(f"[WARN] Preflight still unavailable: {preflight['error']}")
+                        print(f"[33m[WARN][0m Preflight still unavailable: {preflight['error']}")
                         preflight = {'has_conflicts': False}
                 else:
                     _prompt_go_back()
@@ -193,24 +190,24 @@ def start_test_menu(service_running):
                 return
 
         if preflight.get('has_conflicts'):
-            print("[INFO] Clearing conflicting resources...")
+            print("[36m[INFO][0m Clearing conflicting resources...")
             attempted_cleanup = _auto_fix_conflicts(preflight)
             if attempted_cleanup:
-                print("[OK] Standard conflicts cleared.")
+                print("[32m[OK][0m Standard conflicts cleared.")
 
-            print("[INFO] Re-checking cluster state...")
+            print("[36m[INFO][0m Re-checking cluster state...")
             preflight = _get_preflight(service_running)
             if preflight.get('cancelled'):
-                print("[CANCELLED] Preflight refresh was cancelled.")
+                print("[33m[CANCELLED][0m Preflight refresh was cancelled.")
                 _prompt_go_back()
                 return
             if preflight.get('error'):
-                print(f"[WARN] Could not refresh preflight checks: {preflight['error']}")
+                print(f"[33m[WARN][0m Could not refresh preflight checks: {preflight['error']}")
                 _prompt_go_back()
                 return
             if preflight.get('has_conflicts'):
                 if not _handle_remaining_preflight_conflicts(preflight, service_running):
-                    print("[CANCELLED]")
+                    print("[33m[CANCELLED][0m")
                     _prompt_go_back()
                     return
 
@@ -226,17 +223,25 @@ def start_test_menu(service_running):
                 from simulation_service_tool.services.kueue import is_kueue_installed
                 if is_kueue_installed():
                     payload['kueue'] = True
-                    print("[INFO] Kueue detected on cluster — enabling workload queuing.")
+                    print("[36m[INFO][0m Kueue detected on cluster — enabling workload queuing.")
             except Exception:
                 pass
 
         result = call_service('/api/simulation/start', 'POST', payload)
         if 'error' in result:
-            print(f"[ERROR] {result['error']}")
+            print(f"[31m[ERROR][0m {result['error']}")
             _handle_start_error_recovery(result['error'], service_running)
             return
         else:
-            print("[OK] Test started successfully!")
+            print("\033[92m✓ Test started successfully!\033[0m")
+        choice = questionary.select(
+            "What would you like to do?",
+            choices=["Watch pods", "Return to main menu"],
+            style=custom_style
+        ).ask()
+        if choice == "Watch pods":
+            watch_release_pods_kubectl(name)
+        return
     else:
         # Auto-detect Kueue for direct helm path
         if 'kueue' not in config:
@@ -245,7 +250,7 @@ def start_test_menu(service_running):
                 if is_kueue_installed():
                     config['kueue.enabled'] = True
                     config['kueue.queueName'] = 'simulation-queue'
-                    print("[INFO] Kueue detected — enabling workload queuing.")
+                    print("[36m[INFO][0m Kueue detected — enabling workload queuing.")
             except Exception:
                 pass
         cmd = f"helm install {name} ./helm/playwright-agent"
@@ -253,20 +258,11 @@ def start_test_menu(service_running):
             cmd += f" --set {key}={value}"
         print(f"   Running: {cmd}")
         # subprocess.run(cmd, shell=True)  # Uncomment to actually run
-
-    # Offer to watch agents live
-    watch_choice = questionary.select(
-        "What would you like to do next?",
-        choices=[
-            questionary.Choice(title="Watch agents live (recommended)", value="watch"),
-            questionary.Choice(title="Watch pods with kubectl -w", value="kubectl_watch"),
-            questionary.Choice(title="Return to main menu", value="menu"),
-        ],
-        style=custom_style
-    ).ask()
-    if watch_choice == "watch":
-        watch_agents(name, service_running)
-    elif watch_choice == "kubectl_watch":
-        watch_release_pods_kubectl(name)
-    else:
-        _prompt_go_back("Return to main menu")
+        print("\033[92m✓ Test started successfully!\033[0m")
+        choice = questionary.select(
+            "What would you like to do?",
+            choices=["Watch pods", "Return to main menu"],
+            style=custom_style
+        ).ask()
+        if choice == "Watch pods":
+            watch_release_pods_kubectl(name)

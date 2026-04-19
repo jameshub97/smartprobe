@@ -1,4 +1,4 @@
-# kube-prometheus-stack custom values for the asset-manager platform.
+# kube-prometheus-stack custom values for the transfer-stacker platform.
 #
 # Install with:
 #   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -36,16 +36,16 @@ grafana:
     dashboardproviders.yaml:
       apiVersion: 1
       providers:
-        - name: 'asset-manager'
+        - name: 'transfer-stacker'
           orgId: 1
-          folder: 'Asset Manager'
+          folder: 'Transfer Stacker'
           type: file
           disableDeletion: false
           editable: true
           options:
-            path: /var/lib/grafana/dashboards/asset-manager
+            path: /var/lib/grafana/dashboards/transfer-stacker
   dashboards:
-    asset-manager:
+    transfer-stacker:
       simulation-overview:
         json: |
           {
@@ -128,7 +128,7 @@ grafana:
               }
             ],
             "schemaVersion": 39,
-            "tags": ["asset-manager", "simulation"],
+            "tags": ["transfer-stacker", "simulation"],
             "templating": { "list": [] },
             "time": { "from": "now-1h", "to": "now" },
             "title": "Simulation Service Overview",

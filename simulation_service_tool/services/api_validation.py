@@ -43,9 +43,9 @@ ENDPOINTS: list[dict] = [
         "expect_status": [200, 401],  # 401 counts as reachable
     },
     {
-        "service": "Frontend",
+        "service": "Transfer Stacker",
         "method": "GET",
-        "url": "http://localhost:3000/",
+        "url": "http://localhost:5173/",
         "expect_status": 200,
     },
 ]

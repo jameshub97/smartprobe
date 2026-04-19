@@ -101,5 +101,5 @@ def initialize_cluster_menu():
         from simulation_service_tool.services.cluster_init import set_initialized
 
         set_initialized()
-        print("  [INFO] Skipped initialization — flag set so this won't prompt again this session.")
+        print("  [36m[INFO][0m Skipped initialization — flag set so this won't prompt again this session.")
         _prompt_go_back()

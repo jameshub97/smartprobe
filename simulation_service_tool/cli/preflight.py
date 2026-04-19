@@ -69,7 +69,7 @@ def _auto_fix_conflicts(preflight):
 
 
 def _print_preflight_conflicts(preflight, indent=''):
-    print(f"\n{indent}[WARN] Conflicts detected:\n")
+    print(f"\n{indent}[33m[WARN][0m Conflicts detected:\n")
     for conflict in preflight.get('conflicts', []):
         cname = conflict.get('name', ', '.join(conflict.get('releases', ['unknown'])))
         print(f"{indent}   - {conflict['type']}: {cname}")
@@ -82,8 +82,8 @@ def _handle_remaining_preflight_conflicts(preflight, service_running, allow_forc
 
     while True:
         _print_preflight_conflicts(preflight)
-        print("\n[INFO] Initialization and auto-fix already handled the standard blockers.")
-        print("[INFO] Use Cleanup Center or re-initialize if the cluster still drifted.")
+        print("\n[36m[INFO][0m Initialization and auto-fix already handled the standard blockers.")
+        print("[36m[INFO][0m Use Cleanup Center or re-initialize if the cluster still drifted.")
 
         choices = [
             questionary.Choice(title="Open Cleanup Center", value="cleanup"),
@@ -111,13 +111,13 @@ def _handle_remaining_preflight_conflicts(preflight, service_running, allow_forc
 
         refreshed = _get_preflight(service_running)
         if refreshed.get('cancelled'):
-            print("[INFO] Refresh cancelled. Returning to the conflict menu.")
+            print("[36m[INFO][0m Refresh cancelled. Returning to the conflict menu.")
             continue
         if refreshed.get('error'):
-            print(f"[WARN] Could not refresh preflight status: {refreshed['error']}")
+            print(f"[33m[WARN][0m Could not refresh preflight status: {refreshed['error']}")
             return False
         if not refreshed.get('has_conflicts'):
-            print("[OK] Preflight conflicts cleared. Continuing.")
+            print("[32m[OK][0m Preflight conflicts cleared. Continuing.")
             return True
 
         preflight = refreshed
@@ -168,7 +168,7 @@ def _pause_after_fallback(message, error_message=None, endpoint_label=None):
 
         if action == 'commands':
             print()
-            print('[INFO] Quick clean commands:')
+            print('[36m[INFO][0m Quick clean commands:')
             for command in get_quick_cleanup_commands():
                 print(f"  - {' '.join(command)}")
             print()
@@ -204,8 +204,8 @@ def _get_preflight(service_running):
     # but be stuck on all real requests.  A tight-timeout ping detects that
     # state and lets us fall back to direct mode immediately.
     if not _probe_sim_api(timeout=2.5):
-        print("[WARN] Simulation service is not responding (API probe timed out).")
-        print("[INFO] Falling back to direct preflight checks.")
+        print("[33m[WARN][0m Simulation service is not responding (API probe timed out).")
+        print("[36m[INFO][0m Falling back to direct preflight checks.")
         return direct_preflight_check()
 
     # --- Docker services reachability check ----------------------------------
@@ -215,13 +215,13 @@ def _get_preflight(service_running):
     offline = [name for name, up in docker_status.items() if not up]
     if offline:
         services_str = ', '.join(offline)
-        print(f"[WARN] Service(s) unreachable before preflight: {services_str}")
-        print("[INFO] Tests require both the simulation service (5002) and backend API (5001).")
+        print(f"[33m[WARN][0m Service(s) unreachable before preflight: {services_str}")
+        print("[36m[INFO][0m Tests require both the simulation service (5002) and backend API (5001).")
 
     result = call_service('/api/preflight')
     if result.get('error') and _should_fallback_to_direct(result['error']):
         action = _pause_after_fallback(
-            "[WARN] Preflight endpoint unavailable. Falling back to direct preflight checks.",
+            "[33m[WARN][0m Preflight endpoint unavailable. Falling back to direct preflight checks.",
             result.get('error'),
             'GET /api/preflight',
         )
@@ -271,7 +271,7 @@ def _handle_start_error_recovery(error_message, service_running):
 
     if action_type == "delete_release":
         if not value or not re.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$', value):
-            print("[WARN] Refusing cleanup for an invalid release name.")
+            print("[33m[WARN][0m Refusing cleanup for an invalid release name.")
             _prompt_go_back()
             return
         confirm = questionary.confirm(
@@ -284,17 +284,17 @@ def _handle_start_error_recovery(error_message, service_running):
         print(f"\nCleaning conflicting release: {value}")
         result = direct_release_cleanup(value, dry_run=False)
         if result.get('error'):
-            print(f"[WARN] {result['error']}")
+            print(f"[33m[WARN][0m {result['error']}")
         elif result.get('warning'):
-            print(f"[WARN] {result['warning']}")
+            print(f"[33m[WARN][0m {result['warning']}")
         else:
             deleted_anything = result.get('helm') == 'uninstalled' or any(result.get(key) for key in ('pods', 'pvcs', 'pdbs', 'jobs'))
-            print("[OK] Conflicting release cleanup requested." if deleted_anything else "[WARN] No matching release resources were removed.")
+            print("[32m[OK][0m Conflicting release cleanup requested." if deleted_anything else "[33m[WARN][0m No matching release resources were removed.")
     elif action_type == "cleanup_stuck":
         print("\nCleaning shared stuck resources...")
         result = direct_stuck_cleanup(dry_run=False)
         resources_deleted = any(result.get(key) for key in ('stuck_resources', 'orphaned_pvcs', 'conflicting_pdbs'))
-        print("[OK] Stuck resource cleanup requested." if resources_deleted else "[WARN] No stuck resources were found.")
+        print("[32m[OK][0m Stuck resource cleanup requested." if resources_deleted else "[33m[WARN][0m No stuck resources were found.")
     elif action_type == "refresh":
         state = direct_verify_state()
         render_status_summary(False, state)
@@ -313,19 +313,19 @@ def preflight_check(service_running):
     if service_running:
         result = _get_preflight(service_running)
         if result.get('cancelled'):
-            print("\n  [CANCELLED] Preflight check was cancelled.")
+            print("\n  [33m[CANCELLED][0m Preflight check was cancelled.")
         elif result.get('error'):
-            print(f"\n  [WARN] Could not run preflight checks: {result['error']}")
+            print(f"\n  [33m[WARN][0m Could not run preflight checks: {result['error']}")
         elif result.get('has_conflicts'):
             _print_preflight_conflicts(result, indent='  ')
-            print("\n  [INFO] Attempting standard conflict cleanup...")
+            print("\n  [36m[INFO][0m Attempting standard conflict cleanup...")
             attempted_cleanup = _auto_fix_conflicts(result)
             if attempted_cleanup:
                 refreshed = _get_preflight(service_running)
                 if refreshed.get('cancelled'):
-                    print("\n  [INFO] Preflight refresh cancelled.")
+                    print("\n  [36m[INFO][0m Preflight refresh cancelled.")
                 elif refreshed.get('error'):
-                    print(f"\n  [WARN] Could not refresh preflight checks: {refreshed['error']}")
+                    print(f"\n  [33m[WARN][0m Could not refresh preflight checks: {refreshed['error']}")
                 else:
                     result = refreshed
 
@@ -342,12 +342,12 @@ def preflight_check(service_running):
             if action == "resolve":
                 resolved = _handle_remaining_preflight_conflicts(result, service_running, allow_force=False)
                 if resolved:
-                    print("\n  [OK] Cluster is now ready for tests.")
+                    print("\n  [32m[OK][0m Cluster is now ready for tests.")
                     result = _get_preflight(service_running)
             else:
                 print("\n  Return to the main menu when you're ready.")
         elif not result.get('cancelled') and not result.get('error'):
-            print("\n  [OK] No conflicts. Cluster is ready for tests.")
+            print("\n  [32m[OK][0m No conflicts. Cluster is ready for tests.")
     else:
         state = direct_verify_state()
         is_clean = state.get('is_clean', False)
@@ -355,6 +355,6 @@ def preflight_check(service_running):
         print(f"  Playwright pods: {state.get('playwright_pods', '?')}")
         print(f"  Stuck PVCs: {state.get('playwright_pvcs', '?')}")
         print(f"  Conflicting PDBs: {state.get('conflicting_pdbs', '?')}")
-        print(f"\n  Status: {'[OK] Clean' if is_clean else '[WARN] Needs cleanup'}")
+        print(f"\n  Status: {'[32m[OK][0m Clean' if is_clean else '[33m[WARN][0m Needs cleanup'}")
     _prompt_go_back()
     return result if service_running else None

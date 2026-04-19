@@ -57,9 +57,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy Werkzeug access logs for high-frequency dashboard polling endpoints
+import re as _re
+class _PollFilter(logging.Filter):
+    _SKIP = _re.compile(r'GET /api/simulation/(activity|summary|agent-states|live-logs)')
+    def filter(self, record):
+        return not self._SKIP.search(record.getMessage())
+logging.getLogger('werkzeug').addFilter(_PollFilter())
+
 # 4. CREATE FLASK APP BEFORE ROUTES
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080', 'http://localhost:5002'])
+CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080', 'http://localhost:5002'])
 
 _DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), 'dashboard')
 
@@ -290,9 +298,8 @@ class K8sSimulationMonitor:
         conflicts = []
 
         # Check for existing PVC
-        pvc_result = subprocess.run(
-            ["kubectl", "get", "pvc", "playwright-cache", "-o", "name"],
-            capture_output=True, text=True
+        pvc_result = run_cli_command(
+            ["kubectl", "get", "pvc", "playwright-cache", "-o", "name"]
         )
         if pvc_result.returncode == 0 and pvc_result.stdout.strip():
             conflicts.append({
@@ -302,9 +309,8 @@ class K8sSimulationMonitor:
             })
 
         # Check for existing PDB
-        pdb_result = subprocess.run(
-            ["kubectl", "get", "pdb", "playwright-agent-pdb", "-o", "name"],
-            capture_output=True, text=True
+        pdb_result = run_cli_command(
+            ["kubectl", "get", "pdb", "playwright-agent-pdb", "-o", "name"]
         )
         if pdb_result.returncode == 0 and pdb_result.stdout.strip():
             conflicts.append({
@@ -315,11 +321,8 @@ class K8sSimulationMonitor:
             })
 
         # Check for existing helm releases
-        helm_result = subprocess.run(
-            ["helm", "list", "--short"],
-            capture_output=True, text=True
-        )
-        if helm_result.stdout and helm_result.stdout.strip():
+        helm_result = run_cli_command(["helm", "list", "--short"])
+        if helm_result.returncode == 0 and helm_result.stdout and helm_result.stdout.strip():
             releases = [r for r in helm_result.stdout.strip().split('\n') if r]
             if releases:
                 conflicts.append({
@@ -704,7 +707,7 @@ from rich.style import Style
 import questionary
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080'])
+CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080'])
 
 
 # --- Advanced Diagnostic Classes ---
@@ -1210,11 +1213,11 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('werkzeug').addFilter(_PollFilter())
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:5173', 'http://localhost:8080'])
+CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080'])
 
-@app.route('/')
 def dashboard():
     """Serve the simulation dashboard."""
     return send_from_directory(_DASHBOARD_DIR, 'index.html')
@@ -1222,6 +1225,11 @@ def dashboard():
 @app.route('/favicon.svg')
 def favicon():
     """Serve the dashboard favicon."""
+    return send_from_directory(_DASHBOARD_DIR, 'favicon.svg')
+
+@app.route('/favicon.ico')
+def favicon_ico():
+    """Redirect browser's automatic favicon.ico request to the SVG."""
     return send_from_directory(_DASHBOARD_DIR, 'favicon.svg')
 
 @app.route('/metrics')
@@ -1256,8 +1264,16 @@ _updater_running = True
 
 # --- Activity Log ---
 _activity_log: list = []
+_agent_results: list = []
+_agent_states: dict = {}   # pod -> {timestamp, type, details, username} — never trimmed
 _previous_pod_states: dict = {}
 MAX_LOG_ENTRIES = 200
+MAX_AGENT_RESULTS = 500
+
+# Cumulative event totals — accumulate for the lifetime of the server process
+# so the dashboard stats bar stays meaningful after pods are cleaned up.
+_event_totals: dict = {'started': 0, 'completed': 0, 'failed': 0, 'pending': 0,
+                       'registered': 0, 'logged_in': 0}
 
 
 def add_activity_log(event_type: str, pod_name: str, details: str = None):
@@ -1272,6 +1288,9 @@ def add_activity_log(event_type: str, pod_name: str, details: str = None):
     })
     if len(_activity_log) > MAX_LOG_ENTRIES:
         del _activity_log[:len(_activity_log) - MAX_LOG_ENTRIES]
+    # Keep cumulative totals for dashboard stats
+    if event_type in _event_totals:
+        _event_totals[event_type] += 1
 
 
 def detect_state_changes(pods):
@@ -1499,7 +1518,9 @@ class TestController:
             values['simApi'] = 'http://host.docker.internal:5002/api/simulation'
             values['backendApi'] = 'http://host.docker.internal:5001/api/simulation/results'
             values['coordApi'] = 'http://host.docker.internal:5003/api/coordinator'
-            values['image.pullPolicy'] = 'Never'  # image imported into containerd on all nodes
+            # Use local registry so all nodes can pull without pre-loading into containerd
+            values['image.repository'] = 'host.docker.internal:5050/playwright-agent'
+            values['image.pullPolicy'] = 'IfNotPresent'
         if kueue:
             values['kueue.enabled'] = True
             values['kueue.queueName'] = 'simulation-queue'
@@ -2050,7 +2071,8 @@ def simulation_activity():
             'sleeping': cached.get('success', 0),
             'pending': cached.get('pending', 0),
             'running': cached.get('running', 0),
-        }
+        },
+        'totals': dict(_event_totals),
     })
 
 
@@ -2078,7 +2100,109 @@ def agent_action():
     }
     event_type = ACTION_TYPES.get(action, 'action')
     add_activity_log(event_type, pod, details)
+
+    # Persist latest state for this pod — used by the Agents tab (never trimmed)
+    ts = datetime.now(timezone.utc).strftime('%H:%M:%S')
+    state = _agent_states.get(pod, {'username': None, 'history': []})
+    if event_type in ('registered', 'logged_in') and details:
+        state['username'] = details
+    state.update({'timestamp': ts, 'type': event_type, 'details': details})
+    # Rolling history of last 20 events per pod
+    history = state.setdefault('history', [])
+    history.append({'ts': ts, 'type': event_type, 'details': details})
+    if len(history) > 20:
+        del history[:len(history) - 20]
+    _agent_states[pod] = state
+
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/simulation/agent-states')
+def get_agent_states():
+    """Return persistent per-pod latest state (never trimmed)."""
+    return jsonify({'states': _agent_states})
+
+
+@app.route('/api/simulation/live-logs')
+def live_logs():
+    """Stream recent stdout from running agent pods via kubectl logs --prefix."""
+    tail = request.args.get('tail', '8')
+    try:
+        tail = min(int(tail), 50)
+    except (ValueError, TypeError):
+        tail = 8
+
+    # Find running pods
+    list_result = run_cli_command([
+        'kubectl', 'get', 'pods', '-l', 'app=playwright-agent',
+        '--field-selector', 'status.phase=Running',
+        '--no-headers', '-o', 'custom-columns=NAME:.metadata.name',
+    ])
+    pods = [p.strip() for p in (list_result.stdout or '').splitlines() if p.strip()][:10]
+
+    if not pods:
+        return jsonify({'lines': [], 'pods': 0})
+
+    lines = []
+    for pod in pods:
+        result = run_cli_command(['kubectl', 'logs', pod, f'--tail={tail}'])
+        if result.returncode == 0 and result.stdout:
+            for line in result.stdout.splitlines():
+                if line.strip():
+                    lines.append({'pod': pod, 'line': line})
+
+    return jsonify({'lines': lines, 'pods': len(pods)})
+
+
+@app.route('/api/simulation/agent-result', methods=['POST'])
+def agent_result():
+    """Receive final JSON result from a completed agent."""
+    data = request.get_json(force=True)
+    _agent_results.append({
+        'timestamp': datetime.now(timezone.utc).strftime('%H:%M:%S'),
+        'pod': data.get('pod', 'unknown'),
+        'persona': data.get('persona', 'unknown'),
+        'status': data.get('status', 'unknown'),
+        'actions': data.get('actions', []),
+        'durationMs': data.get('durationMs', 0),
+        'error': data.get('error'),
+    })
+    if len(_agent_results) > MAX_AGENT_RESULTS:
+        del _agent_results[:len(_agent_results) - MAX_AGENT_RESULTS]
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/simulation/agent-results')
+def get_agent_results():
+    """Return collected agent final results."""
+    limit = request.args.get('limit', 100, type=int)
+    limit = max(1, min(limit, MAX_AGENT_RESULTS))
+    return jsonify({'results': _agent_results[-limit:]})
+
+
+@app.route('/api/simulation/agent-detail/<pod_name>')
+def get_agent_detail(pod_name):
+    """Return latest state + result + coordinator role for a specific agent pod."""
+    from simulation_service_tool.services.command_runner import is_valid_k8s_name
+    if not is_valid_k8s_name(pod_name):
+        return jsonify({'error': 'Invalid pod name'}), 400
+    state = _agent_states.get(pod_name, {})
+    result = next((r for r in reversed(_agent_results) if r.get('pod') == pod_name), None)
+
+    # Fetch role from coordinator (best-effort)
+    role = None
+    try:
+        import requests as _req
+        r = _req.get(f'{COORDINATOR_URL}/agents', timeout=1)
+        if r.ok:
+            agents = r.json().get('agents', [])
+            match = next((a for a in agents if a.get('pod') == pod_name), None)
+            if match:
+                role = match.get('role')
+    except Exception:
+        pass
+
+    return jsonify({'pod': pod_name, 'state': state, 'result': result, 'role': role})
 
 
 @app.route('/api/simulation/pod-logs/<pod_name>', methods=['GET'])
@@ -2126,8 +2250,12 @@ def _coordinator_reset_safe():
 @app.route('/api/preflight', methods=['GET'])
 def preflight_check_endpoint():
     """Check for conflicts before deployment"""
-    result = K8sSimulationMonitor.preflight_check()
-    return jsonify(result)
+    try:
+        result = K8sSimulationMonitor.preflight_check()
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("preflight_check failed")
+        return jsonify({'error': str(exc), 'has_conflicts': False, 'conflicts': []}), 500
 
 @app.route('/api/simulation/start', methods=['POST'])
 @require_api_key
@@ -2160,23 +2288,35 @@ def start_simulation():
     # Reset coordinator state for the new run
     _coordinator_reset_safe()
 
-    # Transactional mode: use custom agent image with browse+transfer flow
+    # Both basic and transactional modes use the custom playwright-agent image
+    # which contains run.py. The raw mcr.microsoft.com/playwright image has no
+    # CMD that runs any test script, so pods would complete instantly without
+    # doing anything.
+    if not image_repository:
+        image_repository = 'playwright-agent'
+    if not image_tag:
+        image_tag = 'latest'
+    if not command_override:
+        command_override = 'python3 /app/run.py'
+    # Keep jobs/pods alive long enough for the monitor to read stats.
+    # 3600 s = 1 h; callers can still pass a shorter TTL explicitly.
+    if ttl_seconds_after_finished is None:
+        ttl_seconds_after_finished = 3600
+
+    # Transactional mode: also set lighter resources (pure HTTP, no browser)
     if mode == 'transactional':
-        if not image_repository:
-            image_repository = 'playwright-agent'
-        if not image_tag:
-            image_tag = 'latest'
-        if not command_override:
-            command_override = 'python3 /app/run.py'
-        # Lighter resources — pure HTTP, no browser
-        if not request_memory:
-            request_memory = '64Mi'
-        if not request_cpu:
-            request_cpu = '50m'
-        if not limit_memory:
-            limit_memory = '128Mi'
-        if not limit_cpu:
-            limit_cpu = '100m'
+        # Coordinator-based role assignment and asset transfers
+        pass  # image/command already set above
+
+    # Basic mode: slightly more headroom than transactional (coordinator not required)
+    if not request_memory:
+        request_memory = '64Mi'
+    if not request_cpu:
+        request_cpu = '50m'
+    if not limit_memory:
+        limit_memory = '128Mi'
+    if not limit_cpu:
+        limit_cpu = '100m'
 
     replica_count = int(replica_count) if replica_count is not None else None
     shard_total = int(shard_total) if shard_total is not None else None

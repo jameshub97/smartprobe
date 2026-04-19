@@ -49,6 +49,7 @@ def report_action(action: str, details: str = None):
 
 def send_result(status, actions, duration_ms=0, error=None):
     result = {
+        "pod": POD_NAME,
         "persona": PERSONA,
         "status": status,
         "actions": actions,
@@ -60,6 +61,10 @@ def send_result(status, actions, duration_ms=0, error=None):
         requests.post(BACKEND_API, json=result, timeout=5)
     except Exception as e:
         print(f"[agent] result send failed: {e}")
+    try:
+        requests.post(f"{SIM_API}/agent-result", json=result, timeout=3)
+    except Exception:
+        pass
 
 
 def think(lo=None, hi=None):

@@ -1,5 +1,7 @@
 """Interactive pod diagnostics and inspection flows."""
 
+import subprocess
+
 import questionary
 
 from simulation_service_tool.cli.prompts import _prompt_go_back
@@ -106,13 +108,13 @@ def _print_stale_pod_details(stale_info):
     print(f"  Waiting reason: {stale_info.get('waiting_reason') or 'none'}")
 
     if stale_info.get('is_stale'):
-        print("\n  [WARN] This pod is stale and is not running the latest StatefulSet revision.")
+        print("\n  [33m[WARN][0m This pod is stale and is not running the latest StatefulSet revision.")
         if stale_info.get('is_crashing'):
-            print("  [INFO] It is also failing, so recreating it is likely the right fix.")
+            print("  [36m[INFO][0m It is also failing, so recreating it is likely the right fix.")
         else:
-            print("  [INFO] It is stale but not currently crashing.")
+            print("  [36m[INFO][0m It is stale but not currently crashing.")
     else:
-        print("\n  [OK] The StatefulSet pod is running the current revision.")
+        print("\n  [32m[OK][0m The StatefulSet pod is running the current revision.")
 
 
 def _detect_statefulset_test_workload_mismatch(pod, logs_output):
@@ -152,18 +154,18 @@ def diagnose_unhealthy_pod(service_running):
     print("|                  UNHEALTHY POD DIAGNOSIS                     |")
     print("+" + "=" * 62 + "+")
 
-    print("\n  [INFO] Scanning agent pods...")
+    print("\n  [36m[INFO][0m Scanning agent pods...")
 
     pods, pod_error = _kubectl_list_json('pods', 'app=playwright-agent')
     if pod_error:
-        print(f"\n  [WARN] {pod_error}")
+        print(f"\n  [33m[WARN][0m {pod_error}")
         _prompt_go_back()
         return
 
-    print("  [INFO] Selecting the most relevant unhealthy pod...")
+    print("  [36m[INFO][0m Selecting the most relevant unhealthy pod...")
     pod = _pick_debug_pod(pods)
     if not pod:
-        print("\n  [OK] No unhealthy pod found.")
+        print("\n  [32m[OK][0m No unhealthy pod found.")
         _prompt_go_back()
         return
 
@@ -179,7 +181,7 @@ def diagnose_unhealthy_pod(service_running):
 
     stale_info = _get_stale_status_for_pod(pod)
     if stale_info and stale_info.get('is_stale'):
-        print("\n  [WARN] Selected pod belongs to a stale StatefulSet revision.")
+        print("\n  [33m[WARN][0m Selected pod belongs to a stale StatefulSet revision.")
         _print_stale_pod_details(stale_info)
         print("\n  [ACTION]")
         print("  Diagnosis is paused because stale revisions can make pod logs misleading.")
@@ -187,7 +189,7 @@ def diagnose_unhealthy_pod(service_running):
         _prompt_go_back('Return to routine checks')
         return
 
-    print("\n  [INFO] Fetching recent logs (tail 120, 2s timeout per attempt)...")
+    print("\n  [36m[INFO][0m Fetching recent logs (tail 120, 2s timeout per attempt)...")
     logs_output = _get_pod_logs_output(pod_name)
     log_lines = [line.rstrip() for line in logs_output.splitlines() if line.strip()]
     if log_lines:
@@ -195,14 +197,14 @@ def diagnose_unhealthy_pod(service_running):
         for line in log_lines[-12:]:
             print(f"    {line}")
     else:
-        print("\n  [INFO] No recent logs available.")
+        print("\n  [36m[INFO][0m No recent logs available.")
 
     shard_fix_applied = 'running shard 1/' in logs_output.lower() or 'running shard ' in logs_output.lower()
     mismatch = _detect_statefulset_test_workload_mismatch(pod, logs_output)
     if mismatch:
         print("\n  [ANALYSIS]")
-        print(f"  {'[OK]' if shard_fix_applied else '[INFO]'} Shard fix applied: {'yes' if shard_fix_applied else 'not confirmed'}")
-        print("  [WARN] Pod is still crashing after the shard fix.")
+        print(f"  {'[32m[OK][0m' if shard_fix_applied else '[36m[INFO][0m'} Shard fix applied: {'yes' if shard_fix_applied else 'not confirmed'}")
+        print("  [33m[WARN][0m Pod is still crashing after the shard fix.")
         print("\n  [ROOT CAUSE]")
         print(f"  {mismatch['summary']}")
         print(f"  {mismatch['problem']}")
@@ -239,7 +241,7 @@ def show_active_pods_summary(service_running):
 
     pod_assessment = _collect_release_pod_assessment()
     if pod_assessment.get('error'):
-        print(f"\n  [WARN] {pod_assessment['error']}")
+        print(f"\n  [33m[WARN][0m {pod_assessment['error']}")
         _prompt_go_back()
         return
 
@@ -265,7 +267,7 @@ def show_stale_pod_summary(service_running):
 
     stale_info = _get_statefulset_stale_status()
     if not stale_info:
-        print("\n  [INFO] No StatefulSet pod named 'playwright-agent-0' is currently present.")
+        print("\n  [36m[INFO][0m No StatefulSet pod named 'playwright-agent-0' is currently present.")
         _prompt_go_back()
         return
 
@@ -278,3 +280,79 @@ def show_active_ports_summary():
     clear_screen()
     print_port_status_report(get_port_status())
     _prompt_go_back()
+
+
+def view_agent_logs():
+    """Interactive log viewer for playwright-agent pods."""
+    clear_screen()
+    print("+" + "=" * 62 + "+")
+    print("|                    AGENT POD LOGS                            |")
+    print("+" + "=" * 62 + "+")
+
+    pods, pod_error = _kubectl_list_json('pods', 'app=playwright-agent')
+    if pod_error:
+        print(f"\n  \033[33m[WARN]\033[0m {pod_error}")
+        _prompt_go_back()
+        return
+
+    if not pods:
+        print("\n  \033[36m[INFO]\033[0m No agent pods found.")
+        _prompt_go_back()
+        return
+
+    pod_choices = []
+    for pod in pods:
+        name = (pod.get('metadata', {}) or {}).get('name', 'unknown')
+        status = _pod_status_value(pod)
+        restarts = _pod_restart_count(pod)
+        age = _format_pod_age((pod.get('metadata', {}) or {}).get('creationTimestamp'))
+        label = f"{name}  [{status}  restarts={restarts}  age={age}]"
+        pod_choices.append(questionary.Choice(title=label, value=name))
+
+    pod_choices.append(questionary.Separator())
+    pod_choices.append(questionary.Choice(title="Back", value="__back__"))
+
+    try:
+        pod_name = questionary.select(
+            "Select a pod to view logs:",
+            choices=pod_choices,
+            style=custom_style,
+        ).ask()
+    except KeyboardInterrupt:
+        return
+
+    if not pod_name or pod_name == "__back__":
+        return
+
+    print(f"\n  \033[36m[INFO]\033[0m Fetching logs for {pod_name}...")
+    logs_output = _get_pod_logs_output(pod_name)
+    log_lines = [line.rstrip() for line in logs_output.splitlines() if line.strip()]
+
+    if not log_lines:
+        print("\n  \033[36m[INFO]\033[0m No logs available for this pod.")
+        _prompt_go_back()
+        return
+
+    print(f"\n  Showing last {min(len(log_lines), 100)} of {len(log_lines)} lines:\n")
+    for line in log_lines[-100:]:
+        print(f"  {line}")
+
+    try:
+        action = questionary.select(
+            "Next:",
+            choices=[
+                questionary.Choice(title="Stream live  (kubectl logs -f)", value="stream"),
+                questionary.Choice(title="Back", value="back"),
+            ],
+            style=custom_style,
+        ).ask()
+    except KeyboardInterrupt:
+        return
+
+    if action == "stream":
+        print(f"\n  Streaming logs for {pod_name}  (Ctrl+C to stop)...\n")
+        try:
+            subprocess.run(["kubectl", "logs", "-f", pod_name], check=False)
+        except KeyboardInterrupt:
+            print("\n  Stopped streaming.")
+        _prompt_go_back()
