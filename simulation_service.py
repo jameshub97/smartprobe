@@ -27,14 +27,27 @@ except ImportError:
     print("\u26a0\ufe0f  prometheus-client not installed. Metrics disabled. "
           "Run: pip install prometheus-client")
 
+import shutil
 import subprocess
 import json
+import re
+import hashlib
+import threading
+import queue
 import time
+import argparse
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Any
 import os
 import signal
 import sys
+import click
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.style import Style
+import questionary
 from simulation_service_tool.services.command_runner import run_cli_command
 from simulation_service_tool.services.k8s_native import (
     K8S_AVAILABLE, K8sNativeMonitor, REQUEST_TIMEOUT,
@@ -58,16 +71,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Suppress noisy Werkzeug access logs for high-frequency dashboard polling endpoints
-import re as _re
 class _PollFilter(logging.Filter):
-    _SKIP = _re.compile(r'GET /api/simulation/(activity|summary|agent-states|live-logs)')
+    _SKIP = re.compile(r'GET /api/simulation/(activity|summary|agent-states|live-logs)')
     def filter(self, record):
         return not self._SKIP.search(record.getMessage())
 logging.getLogger('werkzeug').addFilter(_PollFilter())
 
 # 4. CREATE FLASK APP BEFORE ROUTES
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080', 'http://localhost:5002'])
+CORS(app, origins=[
+    'http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002',
+    'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080',
+    'http://localhost:5002', 'http://localhost:5174', 'http://localhost:5175',
+], supports_credentials=True)
 
 _DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), 'dashboard')
 
@@ -140,6 +156,54 @@ KUEUE_ACTIVE = Gauge(
     'kueue_active',
     'Whether Kueue is installed and active (1=yes, 0=no)',
 )
+SIMULATION_ACTIVE_TEST = Info(
+    'simulation_active_test',
+    'Currently active simulation test configuration',
+)
+# Initialise to empty so the metric is always present
+SIMULATION_ACTIVE_TEST.info({'target_url': '', 'probe_mode': '', 'test_name': '', 'completions': '', 'parallelism': ''})
+
+# ── Application constants ──────────────────────────────────────────────────────
+
+SIMULATION_MODES = ['basic', 'transactional']
+
+PRESETS = {
+    'tiny': {
+        'completions': 5,
+        'parallelism': 2,
+        'persona': 'impatient',
+        'workers': 1,
+        'mode': 'basic',
+    },
+    'small': {
+        'completions': 10,
+        'parallelism': 5,
+        'persona': 'impatient',
+        'workers': 1,
+        'mode': 'basic',
+    },
+    'medium': {
+        'completions': 50,
+        'parallelism': 10,
+        'persona': 'strategic',
+        'workers': 1,
+        'mode': 'basic',
+    },
+    'large': {
+        'completions': 100,
+        'parallelism': 20,
+        'persona': 'browser',
+        'workers': 1,
+        'mode': 'basic',
+    },
+    'xlarge': {
+        'completions': 500,
+        'parallelism': 50,
+        'persona': 'browser',
+        'workers': 1,
+        'mode': 'basic',
+    },
+}
 
 @app.before_request
 def _track_request_start():
@@ -181,15 +245,13 @@ def require_api_key(f):
     return decorated
 
 # --- Input Validation ---
-import re as _re
-
 def is_valid_release_name(name: str) -> bool:
     """Validate release name against Kubernetes DNS-1123 label rules."""
-    return bool(name and len(name) <= 53 and _re.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$', name))
+    return bool(name and len(name) <= 53 and re.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$', name))
 
 def is_valid_persona(persona: str) -> bool:
     """Validate persona name contains only safe characters."""
-    return bool(persona and len(persona) <= 30 and _re.match(r'^[a-zA-Z0-9_-]+$', persona))
+    return bool(persona and len(persona) <= 30 and re.match(r'^[a-zA-Z0-9_-]+$', persona))
 
 
 # K8s client init, host validation, native_k8s_client_enabled,
@@ -683,35 +745,8 @@ def get_status_kubectl():
         "pending": int(requested_total)
     }
 
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-import subprocess
-import json
-import re
-import threading
-import time
-from datetime import datetime, timezone
-import logging
-import os
-import signal
-import sys
-import argparse
-from typing import Dict, List, Optional, Any
-import click
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.style import Style
-import questionary
-
-app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080'])
-
 
 # --- Advanced Diagnostic Classes ---
-from datetime import timedelta
 
 class DeploymentDiagnostics:
     """Diagnose why deployments are failing"""
@@ -1025,10 +1060,7 @@ def diagnose_cost(release):
     DIAGNOSTICS_TRIGGERED_TOTAL.labels(diagnostic_type='cost').inc()
     diag = CostDiagnostics()
     return jsonify(diag.estimate_test_cost(release))
-import questionary
-# --- EnhancedAgentCLI: Questionary + Rich Combo ---
-from rich.panel import Panel
-from rich.style import Style
+# --- EnhancedAgentCLI ---
 
 class EnhancedAgentCLI:
     def choose_preset_menu_detailed(self):
@@ -1183,73 +1215,18 @@ class EnhancedAgentCLI:
                 self.console.print("[yellow]Watch Pods coming soon![yellow]")
                 input("\nPress Enter to continue...")
 
-#!/usr/bin/env python3
-# simulation_service.py - Refactored with native K8s client
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-import subprocess
-import json
-import re
-import threading
-import time
-from datetime import datetime, timezone
-import logging
-import os
-import signal
-import sys
-import argparse
-from typing import Dict, List, Optional, Any
-import click
-from rich.console import Console
-from rich.table import Table
 
-console = Console()
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-logging.getLogger('werkzeug').addFilter(_PollFilter())
-
-app = Flask(__name__)
-CORS(app, origins=['http://localhost:5173', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:4173', 'http://localhost:8080'])
-
+@app.route('/')
+@app.route('/dashboard')
 def dashboard():
     """Serve the simulation dashboard."""
     return send_from_directory(_DASHBOARD_DIR, 'index.html')
 
 @app.route('/favicon.svg')
-def favicon():
-    """Serve the dashboard favicon."""
-    return send_from_directory(_DASHBOARD_DIR, 'favicon.svg')
-
 @app.route('/favicon.ico')
-def favicon_ico():
-    """Redirect browser's automatic favicon.ico request to the SVG."""
+def favicon():
+    """Serve the dashboard favicon so browsers don't get a 404 and show a letter placeholder."""
     return send_from_directory(_DASHBOARD_DIR, 'favicon.svg')
-
-@app.route('/metrics')
-def prometheus_metrics():
-    """Prometheus metrics endpoint."""
-    return Response(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
-
-# --- API Key Authentication ---
-SIMULATION_API_KEY = os.environ.get('SIMULATION_API_KEY', 'dev-key-change-in-production')
-
-def require_api_key(f):
-    """Decorator to require API key for mutating simulation endpoints."""
-    from functools import wraps
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth = request.headers.get('Authorization')
-        if not auth or auth != f"Bearer {SIMULATION_API_KEY}":
-            return jsonify({'error': 'Unauthorized. Provide Authorization: Bearer <api-key>'}), 401
-        return f(*args, **kwargs)
-    return decorated
 
 # Native Kubernetes clients are initialized near the top of the module.
 
@@ -1270,27 +1247,92 @@ _previous_pod_states: dict = {}
 MAX_LOG_ENTRIES = 200
 MAX_AGENT_RESULTS = 500
 
+# ── Event ingestion queue ────────────────────────────────────────────────────
+# HTTP request handlers put events here immediately (non-blocking) and return.
+# A single consumer thread drains the queue, deduplicates bursts, and writes
+# to _activity_log under a lock — the same admission-control pattern Kueue
+# uses at the Kubernetes layer, applied here in-process.
+_event_queue: queue.Queue = queue.Queue(maxsize=2000)
+_log_lock = threading.Lock()
+
 # Cumulative event totals — accumulate for the lifetime of the server process
 # so the dashboard stats bar stays meaningful after pods are cleaned up.
-_event_totals: dict = {'started': 0, 'completed': 0, 'failed': 0, 'pending': 0,
-                       'registered': 0, 'logged_in': 0}
+_event_totals: dict = {
+    # K8s pod lifecycle
+    'started': 0, 'completed': 0, 'failed': 0, 'pending': 0,
+    # Agent login
+    'registered': 0, 'logged_in': 0, 'agent_done': 0,
+    # Probe
+    'probe_start': 0, 'probe_get': 0, 'probe_error': 0, 'probe_done': 0,
+    # Transfer-stacker
+    'asset_created': 0, 'transfer_completed': 0, 'transfer_started': 0,
+    'conflict_detected': 0, 'consistency_check': 0,
+}
+
+
+def _log_consumer():
+    """Drain _event_queue, deduplicate bursts, write to _activity_log under lock."""
+    # Track the last entry written per pod to suppress identical bursts.
+    # Key: (pod_full, event_type, details)  Value: epoch second of last write.
+    _last_seen: dict = {}
+    DEDUP_WINDOW = 1  # seconds — collapse identical (pod, type, details) within this window
+
+    while True:
+        try:
+            entry = _event_queue.get(timeout=1)
+        except queue.Empty:
+            continue
+
+        key = (entry['pod_full'], entry['type'], entry['details'])
+        now_sec = int(time.time())
+        if _last_seen.get(key) == now_sec:
+            # Exact duplicate within the same second — drop but still drain
+            _event_queue.task_done()
+            continue
+        _last_seen[key] = now_sec
+
+        # Evict stale dedup entries every ~1000 events to bound memory
+        if len(_last_seen) > 1000:
+            cutoff = now_sec - DEDUP_WINDOW * 10
+            _last_seen = {k: v for k, v in _last_seen.items() if v > cutoff}
+
+        with _log_lock:
+            _activity_log.append(entry)
+            if len(_activity_log) > MAX_LOG_ENTRIES:
+                del _activity_log[:len(_activity_log) - MAX_LOG_ENTRIES]
+            et = entry['type']
+            if et in _event_totals:
+                _event_totals[et] += 1
+
+        _event_queue.task_done()
+
+
+_log_consumer_thread = threading.Thread(target=_log_consumer, daemon=True, name='log-consumer')
+_log_consumer_thread.start()
 
 
 def add_activity_log(event_type: str, pod_name: str, details: str = None):
-    """Add an entry to the activity log."""
+    """Enqueue an event for the consumer thread — returns immediately."""
     short_name = pod_name[:20] + '...' if len(pod_name) > 23 else pod_name
-    _activity_log.append({
+    entry = {
         'timestamp': datetime.now(timezone.utc).strftime('%H:%M:%S'),
         'type': event_type,
         'pod': short_name,
         'pod_full': pod_name,
-        'details': details
-    })
-    if len(_activity_log) > MAX_LOG_ENTRIES:
-        del _activity_log[:len(_activity_log) - MAX_LOG_ENTRIES]
-    # Keep cumulative totals for dashboard stats
-    if event_type in _event_totals:
-        _event_totals[event_type] += 1
+        'details': details,
+    }
+    try:
+        _event_queue.put_nowait(entry)
+    except queue.Full:
+        # Queue saturated — drop oldest and retry once so we never block a request thread
+        try:
+            _event_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            _event_queue.put_nowait(entry)
+        except queue.Full:
+            pass
 
 
 def detect_state_changes(pods):
@@ -1321,29 +1363,6 @@ def detect_state_changes(pods):
                 add_activity_log('failed', pod_name, reason)
             _previous_pod_states[pod_name] = phase
 
-# Input validation
-import shlex
-
-def is_valid_release_name(name: str) -> bool:
-    """Validate release name against Kubernetes DNS-1123 label rules."""
-    return bool(name and len(name) <= 53 and re.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$', name))
-
-def is_valid_persona(persona: str) -> bool:
-    """Validate persona name contains only safe characters."""
-    return bool(persona and len(persona) <= 30 and re.match(r'^[a-zA-Z0-9_-]+$', persona))
-
-# Simulation modes
-SIMULATION_MODES = ('basic', 'transactional')
-
-# Preset configurations
-PRESETS = {
-    'tiny': {'completions': 5, 'parallelism': 2, 'persona': 'impatient', 'workers': 1, 'mode': 'basic'},
-    'small': {'completions': 10, 'parallelism': 5, 'persona': 'impatient', 'workers': 2, 'mode': 'basic'},
-    'medium': {'completions': 100, 'parallelism': 20, 'persona': 'strategic', 'workers': 5, 'mode': 'basic'},
-    'large': {'completions': 500, 'parallelism': 50, 'persona': 'browser', 'workers': 10, 'mode': 'basic'},
-    'xlarge': {'completions': 2000, 'parallelism': 100, 'persona': 'browser', 'workers': 10, 'mode': 'basic'}
-}
-
 class HelmClient:
     """Helm client wrapper for test orchestration"""
     
@@ -1351,12 +1370,40 @@ class HelmClient:
         self.namespace = namespace
         self.dry_run = dry_run
     
+    # Directories to search for helm / kubectl beyond what the service process
+    # inherited.  Homebrew on Apple-silicon installs to /opt/homebrew/bin which
+    # is often absent from the PATH of GUI-launched or supervisor-managed
+    # processes.
+    _EXTRA_BIN_DIRS = [
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/usr/bin',
+        '/bin',
+    ]
+
+    @classmethod
+    def _augmented_env(cls) -> dict:
+        env = os.environ.copy()
+        current = env.get('PATH', '')
+        parts = current.split(':')
+        extra = ':'.join(d for d in cls._EXTRA_BIN_DIRS if d not in parts)
+        env['PATH'] = f"{extra}:{current}" if extra else current
+        return env
+
+    @classmethod
+    def _resolve_binary(cls, name: str) -> str:
+        found = shutil.which(name, path=cls._augmented_env()['PATH'])
+        return found if found else name
+
     def _run(self, cmd: List[str]) -> Dict[str, Any]:
         """Run a helm command safely (never uses shell=True)"""
         if self.dry_run:
             logger.info(f"[DRY RUN] {' '.join(cmd)}")
             return {"success": True, "dry_run": True, "stdout": "", "stderr": ""}
 
+        # Resolve the binary so the call succeeds even when /opt/homebrew/bin
+        # is absent from the service process PATH (common on macOS).
+        cmd = [self._resolve_binary(cmd[0]), *cmd[1:]]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
             return {
@@ -1481,7 +1528,9 @@ class TestController:
                  backoff_limit: Optional[int] = None,
                  ttl_seconds_after_finished: Optional[int] = None,
                  command_override: Optional[str] = None,
-                 kueue: Optional[bool] = None) -> Dict:
+                 kueue: Optional[bool] = None,
+                 probe_mode: Optional[str] = None,
+                 probe_url: Optional[str] = None) -> Dict:
         """Run a test with specified parameters"""
         
         values = {
@@ -1506,6 +1555,12 @@ class TestController:
             values['backoffLimit'] = backoff_limit
         if ttl_seconds_after_finished is not None:
             values['ttlSecondsAfterFinished'] = ttl_seconds_after_finished
+        # Default to the local custom agent image so pods never fall back to the
+        # upstream mcr.microsoft.com/playwright base image which has no run.py.
+        if not image_repository:
+            image_repository = 'playwright-agent'
+        if not image_tag:
+            image_tag = 'latest'
         if image_repository:
             values['image.repository'] = image_repository
         if image_tag:
@@ -1520,13 +1575,24 @@ class TestController:
             values['coordApi'] = 'http://host.docker.internal:5003/api/coordinator'
             # Use local registry so all nodes can pull without pre-loading into containerd
             values['image.repository'] = 'host.docker.internal:5050/playwright-agent'
-            values['image.pullPolicy'] = 'IfNotPresent'
+            values['image.pullPolicy'] = 'Always'
         if kueue:
             values['kueue.enabled'] = True
             values['kueue.queueName'] = 'simulation-queue'
             logger.info(f"📋 Kueue queuing enabled for '{name}'")
-        
-        logger.info(f"🚀 Starting test '{name}' with {completions} agents")
+        values['probeMode'] = probe_mode or 'basic'
+        if probe_url:
+            values['probeUrl'] = probe_url
+        _active_target = probe_url or values.get('targetUrl', '')
+        SIMULATION_ACTIVE_TEST.info({
+            'target_url': _active_target,
+            'probe_mode': values['probeMode'],
+            'test_name': name,
+            'completions': str(completions),
+            'parallelism': str(parallelism),
+        })
+
+        logger.info(f"🚀 Starting test '{name}' with {completions} agents (mode={values['probeMode']})")
         result = helm_client.install(name, "./helm/playwright-agent", values, wait=wait)
         
         if result['success']:
@@ -1561,8 +1627,8 @@ class TestController:
         """Stop a running test"""
         logger.info(f"🛑 Stopping test '{name}'")
         result = helm_client.uninstall(name)
-        
         if result['success']:
+            SIMULATION_ACTIVE_TEST.info({'target_url': '', 'probe_mode': '', 'test_name': '', 'completions': '', 'parallelism': ''})
             return {'success': True, 'name': name}
         else:
             return {'success': False, 'error': result['stderr']}
@@ -1889,6 +1955,11 @@ def watch_release_progress(release_name: Optional[str] = None):
 
 def watch_release_pods_kubectl(release_name: str):
     """Watch pods for a specific release using kubectl -w."""
+    import shutil
+    if not shutil.which("kubectl"):
+        print("\n[WARN] kubectl not found in PATH — cannot watch pods live.")
+        print(f"       Check status manually with: kubectl get pods -l release={release_name}")
+        return
     print(f"\nWatching Kubernetes pods for release '{release_name}'")
     print("Press Ctrl+C to stop watching.\n")
     try:
@@ -1896,6 +1967,8 @@ def watch_release_pods_kubectl(release_name: str):
             ["kubectl", "get", "pods", "-w", "-l", f"release={release_name}"],
             check=False,
         )
+    except FileNotFoundError:
+        print("\n[WARN] kubectl not found — cannot watch pods.")
     except KeyboardInterrupt:
         print("\nStopped watching pods.")
 
@@ -1934,6 +2007,11 @@ def _background_updater():
             data = k8s_monitor.get_detailed_summary()
             _cache['data'] = data
             _cache['timestamp'] = time.time()
+            # Keep Prometheus gauges in sync so /metrics always reflects reality
+            AGENT_PODS_ACTIVE.set(data.get('running', 0))
+            AGENT_PODS_SUCCEEDED.set(data.get('success', 0))
+            AGENT_PODS_FAILED.set(data.get('errors', 0))
+            AGENT_PODS_PENDING.set(data.get('pending', 0))
             # Detect pod state changes for activity log
             pods = k8s_monitor.get_pods()
             detect_state_changes(pods)
@@ -1994,6 +2072,7 @@ def _read_prometheus_gauges() -> dict:
         'kueue_pending': _gauge_val(KUEUE_PENDING_WORKLOADS),
         'kueue_admitted': _gauge_val(KUEUE_ADMITTED_WORKLOADS),
         'kueue_active': _gauge_val(KUEUE_ACTIVE),
+        'active_test': getattr(SIMULATION_ACTIVE_TEST, '_value', {}),
     }
 
 
@@ -2065,14 +2144,106 @@ def simulation_activity():
     limit = request.args.get('limit', 10, type=int)
     limit = max(1, min(limit, MAX_LOG_ENTRIES))
     cached = _cache.get('data') or {}
+    with _log_lock:
+        activity_snapshot = list(_activity_log[-limit:])
+        totals_snapshot = dict(_event_totals)
     return jsonify({
-        'activity': _activity_log[-limit:],
+        'activity': activity_snapshot,
         'summary': {
             'sleeping': cached.get('success', 0),
             'pending': cached.get('pending', 0),
             'running': cached.get('running', 0),
         },
-        'totals': dict(_event_totals),
+        'totals': totals_snapshot,
+    })
+
+
+def _parse_transfer_items(summary: str):
+    """Parse transfer item summaries into Transfer Stacker item payloads."""
+    if not summary:
+        return [{'name': 'Item', 'qty': 1}]
+
+    items = []
+    for part in [p.strip() for p in summary.split(',') if p.strip()]:
+        m = re.match(r'^(.*)\sx(\d+)$', part)
+        if m:
+            items.append({'name': (m.group(1) or part).strip(), 'qty': int(m.group(2) or 1)})
+        else:
+            items.append({'name': part, 'qty': 1})
+
+    return items or [{'name': 'Item', 'qty': 1}]
+
+
+def _parse_transfer_details(details: str, fallback_sender: str):
+    """Convert freeform transfer_completed details into structured fields."""
+    if not details:
+        return {
+            'name': 'Transfer',
+            'sender': fallback_sender,
+            'recipient': 'unknown',
+            'items': [{'name': 'Item', 'qty': 1}],
+        }
+
+    parts = [p.strip() for p in details.split(' — ')]
+    name = parts[0] if len(parts) > 0 and parts[0] else 'Transfer'
+    flow = parts[1] if len(parts) > 1 else ''
+    item_summary = parts[2] if len(parts) > 2 else 'Item x1'
+
+    sender = fallback_sender
+    recipient = 'unknown'
+    if '→' in flow:
+        sender_part, recipient_part = flow.split('→', 1)
+        sender = (sender_part or fallback_sender).strip() or fallback_sender
+        recipient = (recipient_part or 'unknown').strip() or 'unknown'
+
+    return {
+        'name': name,
+        'sender': sender,
+        'recipient': recipient,
+        'items': _parse_transfer_items(item_summary),
+    }
+
+
+def _stable_int_id(value: str) -> int:
+    """Generate deterministic numeric ids for UI list rendering keys."""
+    digest = hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]
+    return int(digest, 16)
+
+
+@app.route('/api/simulation/transfer-stacker-log')
+def simulation_transfer_stacker_log():
+    """Return transfer_completed events in Transfer Stacker RemoteStack shape."""
+    limit = request.args.get('limit', 200, type=int)
+    limit = max(1, min(limit, MAX_LOG_ENTRIES))
+
+    with _log_lock:
+        transfer_events = [e for e in _activity_log if e.get('type') == 'transfer_completed']
+
+    transfer_events = transfer_events[-limit:]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entries = []
+    for ev in transfer_events:
+        sender_fallback = ev.get('pod_full') or ev.get('pod') or 'unknown'
+        parsed = _parse_transfer_details(ev.get('details'), sender_fallback)
+        id_source = f"{ev.get('timestamp','')}|{ev.get('pod_full','')}|{ev.get('details','')}"
+        entry = {
+            'id': _stable_int_id(id_source),
+            'name': parsed['name'],
+            'createdByUserId': parsed['sender'],
+            'createdByUsername': parsed['sender'],
+            'createdAt': now_iso,
+            'status': 'transferred',
+            'recipient': parsed['recipient'],
+            'transferredAt': now_iso,
+            'items': parsed['items'],
+        }
+        entries.append(entry)
+
+    return jsonify({
+        'entries': entries,
+        'source': 'smartprobe',
+        'count': len(entries),
     })
 
 
@@ -2097,6 +2268,11 @@ def agent_action():
         'conflict_detected': 'conflict_detected',
         'consistency_check': 'consistency_check',
         'agent_done': 'agent_done',
+        # Basic probe events
+        'probe_start': 'probe_start',
+        'probe_get': 'probe_get',
+        'probe_error': 'probe_error',
+        'probe_done': 'probe_done',
     }
     event_type = ACTION_TYPES.get(action, 'action')
     add_activity_log(event_type, pod, details)
@@ -2247,6 +2423,21 @@ def _coordinator_reset_safe():
         pass
 
 
+@app.route('/api/simulation/coordinator/<path:subpath>', methods=['GET', 'POST'])
+def coordinator_proxy(subpath):
+    """Proxy coordinator API requests — keeps dashboard same-origin in local dev."""
+    import requests as _req
+    try:
+        url = f'{COORDINATOR_URL}/{subpath}'
+        if request.method == 'POST':
+            r = _req.post(url, json=request.get_json(silent=True), timeout=2)
+        else:
+            r = _req.get(url, params=request.args, timeout=2)
+        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type', 'application/json'))
+    except Exception:
+        return jsonify({'agents': [], 'count': 0}), 200
+
+
 @app.route('/api/preflight', methods=['GET'])
 def preflight_check_endpoint():
     """Check for conflicts before deployment"""
@@ -2371,6 +2562,8 @@ def start_simulation():
         ttl_seconds_after_finished=ttl_seconds_after_finished,
         command_override=command_override,
         kueue=kueue,
+        probe_mode=mode,
+        probe_url=(req.get('probeUrl') or '').strip() or None,
     )
     _test_duration = time.time() - _test_t0
     action_result = 'success' if result.get('success') else 'failure'

@@ -24,14 +24,7 @@ from simulation_service_tool.services.direct_cleanup import (
     get_quick_cleanup_commands,
     get_test_releases,
 )
-
-
-def _prompt_go_back():
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 def _cleanup_issue(summary, remediation):

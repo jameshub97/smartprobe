@@ -8,12 +8,8 @@ from simulation_service_tool.services.direct_cleanup import direct_preflight_che
 from simulation_service_tool.menus.ports import get_port_status
 
 
-def _run_command(args, timeout=None):
-    return run_cli_command(args, timeout=timeout)
-
-
 def _kubectl_get_json(resource_type, resource_name):
-    result = _run_command(["kubectl", "get", resource_type, resource_name, "-o", "json"])
+    result = run_cli_command(["kubectl", "get", resource_type, resource_name, "-o", "json"])
     if result.returncode != 0 or not result.stdout.strip():
         return None, result.stderr.strip() or f"{resource_type}/{resource_name} not found"
     try:
@@ -27,7 +23,7 @@ def _kubectl_list_json(resource_type, label_selector=None):
     if label_selector:
         args.extend(["-l", label_selector])
 
-    result = _run_command(args)
+    result = run_cli_command(args)
     if result.returncode != 0 or not result.stdout.strip():
         return [], result.stderr.strip() or f"{resource_type} not found"
     try:

@@ -53,29 +53,35 @@ async def register(request: Request):
     token = data.get('token', '')
 
     async with _lock:
-        agent_count = len(_state['agents'])
-        # 40% sellers, 50% buyers, 10% observers
-        r = agent_count % 10
-        if r < 4:
-            role = 'seller'
-        elif r < 9:
-            role = 'buyer'
+        existing = _state['agents'].get(pod)
+        if existing:
+            # Keep the original role — re-registration must not reassign
+            role = existing['role']
+            agent_count = len(_state['agents'])
         else:
-            role = 'observer'
+            # Assign role based on current agent count: 40% sellers, 50% buyers, 10% observers
+            agent_count = len(_state['agents'])
+            r = agent_count % 10
+            if r < 4:
+                role = 'seller'
+            elif r < 9:
+                role = 'buyer'
+            else:
+                role = 'observer'
 
         _state['agents'][pod] = {
             'role': role,
             'user_id': user_id,
             'username': username,
             'token': token,
-            'registered_at': time.time(),
+            'registered_at': existing['registered_at'] if existing else time.time(),
         }
         pool_size = len(_state['asset_pool'])
         tx_count = len(_state['transactions'])
 
     return {
         'role': role,
-        'agent_count': agent_count + 1,
+        'agent_count': agent_count + (0 if existing else 1),
         'pool_size': pool_size,
         'tx_count': tx_count,
     }

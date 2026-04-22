@@ -7,14 +7,17 @@ RUN apt-get update && \
     apt-get install -y python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python playwright (not the Node.js one from the base image)
 RUN pip3 install playwright requests
 
-# Install Playwright browsers
-RUN playwright install chromium
-RUN playwright install-deps
+# Install Chromium for the Python playwright package
+RUN python3 -m playwright install chromium
+RUN python3 -m playwright install-deps chromium
 
 # Copy script
 COPY agent/run.py /app/run.py
 
+# Clear the base image's Node.js playwright ENTRYPOINT so it doesn't run as
+# a rogue process alongside our Python script.
+ENTRYPOINT []
 CMD ["python3", "/app/run.py"]

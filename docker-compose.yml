@@ -20,7 +20,7 @@ services:
 
   backend1:
     build:
-      context: .
+      context: ../asset-manager-1
       dockerfile: backend/Dockerfile
     depends_on:
       postgres:
@@ -45,7 +45,7 @@ services:
 
   backend2:
     build:
-      context: .
+      context: ../asset-manager-1
       dockerfile: backend/Dockerfile
     depends_on:
       postgres:
@@ -69,12 +69,26 @@ services:
       FLASK_ENV: ${FLASK_ENV:-development}
     ports:
       - "5002:5002"
+    volumes:
+      - ./simulation_service.py:/app/simulation_service.py:ro
+      - ./dashboard:/app/dashboard:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
       interval: 15s
       timeout: 3s
       retries: 3
       start_period: 10s
+    networks:
+      - transfer-net
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./coordinator_service.py:/app/coordinator_service.py:ro
     networks:
       - transfer-net
 
@@ -92,8 +106,10 @@ services:
         condition: service_started
       simulation:
         condition: service_healthy
+      coordinator:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      test: ["CMD", "nginx", "-t"]
       interval: 15s
       timeout: 3s
       retries: 3
@@ -103,8 +119,8 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
+      context: ../asset-manager-1/frontend
+      dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080/api}
     depends_on:

@@ -195,3 +195,13 @@ def _prompt_go_back(title="Go back"):
         choices=[questionary.Choice(title=title, value="back")],
         style=custom_style,
     ).ask()
+
+
+def _prompt_continue(title="Continue"):
+    if not sys.stdin.isatty():
+        return
+    questionary.select(
+        "Next:",
+        choices=[questionary.Choice(title=title, value="continue")],
+        style=custom_style,
+    ).ask()

@@ -15,14 +15,7 @@ from simulation_service_tool.services.kueue import (
     get_local_queue_status,
     list_workloads,
 )
-
-
-def _prompt_go_back():
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 def _load_kueue_state(progress_callback=None):

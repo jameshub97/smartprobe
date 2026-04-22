@@ -83,7 +83,7 @@ def _handle_remaining_preflight_conflicts(preflight, service_running, allow_forc
     while True:
         _print_preflight_conflicts(preflight)
         print("\n[36m[INFO][0m Initialization and auto-fix already handled the standard blockers.")
-        print("[36m[INFO][0m Use Cleanup Center or re-initialize if the cluster still drifted.")
+        print("[36m[INFO][0m Use Cleanup Center or re-initialize if the cluster has residual data.")
 
         choices = [
             questionary.Choice(title="Open Cleanup Center", value="cleanup"),
@@ -231,7 +231,83 @@ def _get_preflight(service_running):
     return result
 
 
+_BREW_PACKAGES = {
+    "helm": "helm",
+    "kubectl": "kubectl",
+}
+
+_INSTALL_HINTS = {
+    "helm": "https://helm.sh/docs/intro/install/",
+    "kubectl": "https://kubernetes.io/docs/tasks/tools/",
+}
+
+
+def _brew_available() -> bool:
+    import shutil
+    return shutil.which("brew") is not None
+
+
+def _install_via_brew(binary: str) -> bool:
+    """Run `brew install <pkg>` with live output. Returns True on success."""
+    import subprocess
+    pkg = _BREW_PACKAGES.get(binary, binary)
+    print(f"\n\033[1mInstalling {pkg} via Homebrew...\033[0m")
+    result = subprocess.run(["brew", "install", pkg], shell=False)
+    return result.returncode == 0
+
+
 def _handle_start_error_recovery(error_message, service_running):
+    # Missing dependency errors — cleanup options are irrelevant; offer install instead.
+    _lower = (error_message or "").lower()
+    if "required command" in _lower and "was not found" in _lower:
+        import re as _re
+        m = _re.search(r"required command '([^']+)'", error_message, _re.IGNORECASE)
+        binary = m.group(1) if m else "helm"
+        print(f"\n\033[1mMissing dependency: \033[31m{binary}\033[0m\033[0m")
+        print(f"  '{binary}' is not installed or is not on PATH.")
+        docs = _INSTALL_HINTS.get(binary)
+        if docs:
+            print(f"  Docs: {docs}")
+        print()
+
+        choices = []
+        if _brew_available() and binary in _BREW_PACKAGES:
+            choices.append(
+                questionary.Choice(
+                    title=f"Install {binary} now  (brew install {_BREW_PACKAGES[binary]})",
+                    value="brew_install",
+                )
+            )
+        choices.append(questionary.Choice(title="Return to menu", value="back"))
+
+        action = questionary.select(
+            f"  '{binary}' is required to start tests. What would you like to do?",
+            choices=choices,
+            style=custom_style,
+        ).ask()
+
+        if action == "brew_install":
+            success = _install_via_brew(binary)
+            if success:
+                import shutil as _shutil
+                # Check whether the binary is now resolvable (it will be, since
+                # the service now augments PATH to include /opt/homebrew/bin).
+                resolved = _shutil.which(binary)
+                print(f"\n\033[32m✓ {binary} installed successfully.\033[0m")
+                if resolved:
+                    print(f"  Found at: {resolved}")
+                    print(f"  You can retry starting the test now — go back and select Start a Test.")
+                else:
+                    print(f"  Installed but not yet on your shell PATH.")
+                    print(f"  You can still retry from the menu; the CLI will find it automatically.")
+            else:
+                print(f"\n\033[33m[WARN]\033[0m Installation may have failed. Check the output above.")
+                if docs:
+                    print(f"  Manual install: {docs}")
+        print()
+        _prompt_go_back()
+        return
+
     conflicting_release = _extract_conflicting_release(error_message)
     choices = []
 

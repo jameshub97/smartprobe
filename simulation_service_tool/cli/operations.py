@@ -24,10 +24,6 @@ from simulation_service_tool.ui.styles import custom_style
 from simulation_service_tool.ui.utils import clear_screen
 
 
-def _run_command(args, timeout=None):
-    return run_cli_command(args, timeout=timeout)
-
-
 def _extract_preflight_releases(preflight):
     releases = []
     for conflict in preflight.get('conflicts', []):
@@ -97,7 +93,7 @@ def hard_reset(service_running):
         ]
         for title, args in _cmds:
             progress(f"{title}...")
-            _r = _run_command(args)
+            _r = run_cli_command(args)
             _actions.append((title, _r.stdout.strip() or _r.stderr.strip() or 'processed'))
         progress("Verifying cluster state...")
         _state = direct_verify_state()
@@ -317,59 +313,36 @@ def watch_progress(service_running):
 
 
 def start_service():
-    port_status = get_port_status('5002')
-    if port_status.get('error'):
-        print(f"\n[33m[WARN][0m Could not inspect port 5002: {port_status['error']}")
+    if check_service():
+        print("\n[32m[OK][0m Simulation service is already running.")
+        _prompt_go_back()
+        return
 
-    if port_status.get('in_use'):
-        primary = port_status['processes'][0]
-        print("\n[33m[WARN][0m Port 5002 is already in use.")
-        print(f"   Listener: {primary['command']} (PID {primary['pid']})")
-
-        choices = []
-        if check_service():
-            choices.append(questionary.Choice(title="Use existing service", value="reuse"))
-        choices.extend([
-            questionary.Choice(title="Kill existing process and start fresh", value="restart"),
-            questionary.Choice(title="Start anyway (may fail)", value="force"),
-            questionary.Choice(title="Cancel", value="cancel"),
-        ])
-
-        action = questionary.select(
-            "What would you like to do?",
-            choices=choices,
-            style=custom_style,
-        ).ask()
-
-        if action == "cancel" or not action:
-            return
-        if action == "reuse":
-            print("\n[32m[OK][0m Using the existing simulation service.")
-            _prompt_go_back()
-            return
-        if action == "restart":
-            kill_result = kill_port('5002')
-            if kill_result.get('failed_pids'):
-                print(f"\n[33m[WARN][0m Could not release port 5002 from PIDs: {', '.join(kill_result['failed_pids'])}")
-                _prompt_go_back()
-                return
-            time.sleep(0.5)
-
-    print("\nStarting simulation service...")
-    subprocess.Popen([sys.executable, "simulation_service.py", "server", "--port", "5002"])
+    print("\nStarting simulation service via docker compose...")
+    import os as _os
+    _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    result = subprocess.run(
+        ['docker', 'compose', 'restart', 'simulation'],
+        capture_output=True, text=True,
+        cwd=_repo_root,
+    )
+    if result.returncode != 0:
+        print(f"\n[33m[WARN][0m docker compose restart failed: {result.stderr.strip() or 'unknown error'}")
+        _prompt_go_back()
+        return
 
     def _wait_for_service(progress_callback=None):
         progress = progress_callback or (lambda _: None)
-        for attempt in range(1, 7):
-            progress(f"Waiting for service (attempt {attempt}/6)...")
-            time.sleep(0.5)
+        for attempt in range(1, 11):
+            progress(f"Waiting for service (attempt {attempt}/10)...")
+            time.sleep(2)
             if check_service():
                 return True
         return False
 
-    online = show_loading_spinner(_wait_for_service, message="Starting service on http://localhost:5002...", timeout=10)
+    online = show_loading_spinner(_wait_for_service, message="Waiting for simulation container on http://localhost:5002...", timeout=25)
     if online:
         print("   [32m[OK][0m Service is reachable.")
     else:
-        print("   [33m[WARN][0m Service did not respond yet. Check Diagnostics -> Service Health.")
+        print("   [33m[WARN][0m Service did not respond yet. Check: docker compose logs simulation")
     _prompt_go_back()

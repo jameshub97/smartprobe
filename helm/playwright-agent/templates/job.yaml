@@ -47,5 +47,15 @@ spec:
           value: "{{ .Values.simApi }}"
         - name: COORD_API
           value: "{{ .Values.coordApi }}"
+        - name: PROBE_MODE
+          value: "{{ .Values.probeMode }}"
+        - name: AGENT_ROUNDS
+          value: "{{ .Values.agentRounds }}"
+        - name: ROUND_SLEEP
+          value: "{{ .Values.roundSleep }}"
+        {{- if .Values.probeUrl }}
+        - name: PROBE_URL
+          value: "{{ .Values.probeUrl }}"
+        {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}

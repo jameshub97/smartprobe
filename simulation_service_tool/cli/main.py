@@ -37,7 +37,13 @@ Entry point: ``interactive_menu()``
        Kubernetes API      k8s_connectivity.k8s_reachable()
      Hard exit: Docker API unreachable → print error, return False.
 
-  4. ``welcome_menu()``  (menus/welcome.py)
+  4. ``_run_docker_health_check()``
+     Prints each Docker Compose service with a coloured health status and
+     prompts the user to continue or abort if any service is unhealthy.
+     If the stack is not running the user is offered Continue / Abort.
+     If all services are healthy it auto-continues without prompting.
+
+  5. ``welcome_menu()``  (menus/welcome.py)
      Determines which menu variant to show based on three state flags:
        • ``service_running``      — simulation API responds on :5002
        • ``cluster_initialized``  — cluster_init.is_initialized() returns True
@@ -129,9 +135,11 @@ def _cluster_runtime_status() -> str:
 
 _CHECKS = [
     ("Simulation service",  lambda: _http_status("http://localhost:5002/health")),
+    ("Coordinator",         lambda: _http_status("http://localhost:5003/api/coordinator/health")),
     ("Backend API",         lambda: _http_status("http://localhost:5001/health")),
     ("Transfer Stacker",    lambda: _http_status("http://localhost:5173/")),
     ("PostgreSQL",          lambda: "reachable" if _tcp_reachable("localhost", 5432) else "unreachable"),
+    ("Local registry",      lambda: "reachable" if _tcp_reachable("localhost", 5050) else "unreachable"),
     ("Docker API",          _docker_api_status),
     ("Cluster runtime",     _cluster_runtime_status),
     ("Kubernetes API",      _k8s_reachable),
@@ -451,6 +459,276 @@ def _open_dashboard():
         webbrowser.open("http://localhost:5002")
 
 
+def _run_docker_health_check() -> bool:
+    """Show Docker Compose service health at launch and ask user to confirm.
+
+    Runs after the startup diagnostics table.  If the stack is not running or
+    Docker is unavailable it prints a brief warning and gives the user the
+    option to continue anyway or abort.
+
+    Returns True when it is safe to proceed, False on Ctrl-C / abort.
+    """
+    import questionary
+    from simulation_service_tool.ui.styles import custom_style
+    from simulation_service_tool.services.docker_compose import (
+        is_docker_available, is_compose_running, get_service_health, EXPECTED_SERVICES,
+    )
+
+    green  = "\033[32m"
+    yellow = "\033[33m"
+    red    = "\033[31m"
+    bold   = "\033[1m"
+    dim    = "\033[2m"
+    reset  = "\033[0m"
+
+    print(f"{bold}Docker service health{reset}")
+    print("─" * 44)
+
+    if not is_docker_available():
+        print(f"  {'Docker Compose':<24} {yellow}○ Docker unavailable{reset}")
+        print("─" * 44)
+        print()
+        return True  # non-fatal — user may only care about K8s
+
+    if not is_compose_running():
+        print(f"  {'Stack':<24} {yellow}○ not running{reset}")
+        print("─" * 44)
+        print()
+        try:
+            action = questionary.select(
+                "  Docker Compose stack is not running. Continue anyway?",
+                choices=[
+                    questionary.Choice(title="Continue to CLI", value="continue"),
+                    questionary.Choice(title="Abort", value="abort"),
+                ],
+                style=custom_style,
+            ).ask()
+        except (KeyboardInterrupt, Exception):
+            return False
+        return action == "continue" or action is None
+
+    health = get_service_health()
+    has_issues = False
+    for svc in EXPECTED_SERVICES:
+        info = health.get(svc) if '_error' not in health else None
+        if info is None:
+            status = f"{yellow}○ not running{reset}"
+            has_issues = True
+        elif info.get('health') == 'unhealthy':
+            status = f"{red}✗ unhealthy{reset}"
+            has_issues = True
+        elif info.get('health') == 'starting':
+            status = f"{yellow}○ starting{reset}"
+        else:
+            status = f"{green}● {info.get('state', 'running')}{reset}"
+            if info.get('health') not in (None, 'healthy', 'starting'):
+                status += f" ({info['health']})"
+        print(f"  {svc:<24} {status}")
+
+    print("─" * 44)
+    print()
+
+    if not has_issues:
+        # All healthy — auto-continue, no prompt needed
+        return True
+
+    # Some services are unhealthy / missing — let user decide
+    try:
+        action = questionary.select(
+            "  Some Docker services have issues. How would you like to proceed?",
+            choices=[
+                questionary.Choice(title="Continue to CLI", value="continue"),
+                questionary.Choice(title="Abort", value="abort"),
+            ],
+            style=custom_style,
+        ).ask()
+    except (KeyboardInterrupt, Exception):
+        return False
+
+    return action == "continue" or action is None
+
+
+def _get_k8s_node_containers() -> list[str]:
+    """Return the Docker container names for all current Kubernetes nodes.
+
+    For kind clusters the node container names match the kubectl node names
+    (e.g. desktop-worker, desktop-worker2 …).  For minikube/docker-desktop
+    the single node container is usually 'minikube' or managed by the OS.
+    We fall back to `kind get nodes` if kubectl fails.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["kubectl", "get", "nodes", "--no-headers",
+             "-o", "custom-columns=NAME:.metadata.name"],
+            capture_output=True, text=True, timeout=8,
+        )
+        if r.returncode == 0:
+            return [n.strip() for n in r.stdout.splitlines() if n.strip()]
+    except Exception:
+        pass
+    # Fallback: kind get nodes
+    try:
+        r = subprocess.run(
+            ["kind", "get", "nodes"],
+            capture_output=True, text=True, timeout=8,
+        )
+        if r.returncode == 0:
+            return [n.strip() for n in r.stdout.splitlines() if n.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _image_on_node(container_name: str, image_name: str) -> bool:
+    """Return True if *image_name* appears in crictl images on *container_name*."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["docker", "exec", container_name, "crictl", "images",
+             "--output", "json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return False
+        import json as _json
+        data = _json.loads(r.stdout)
+        for img in data.get("images", []):
+            for tag in img.get("repoTags", []):
+                if image_name in tag:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+_AGENT_IMAGE = "playwright-agent"
+_AGENT_FULL  = "host.docker.internal:5050/playwright-agent:latest"
+
+
+def _run_k8s_image_check() -> None:
+    """Check whether the playwright-agent image is present on k8s worker nodes.
+
+    Prints a status table (one row per node) and offers to run
+    ``kind load docker-image`` inline if any node is missing the image.
+    """
+    import questionary
+    import subprocess
+    from simulation_service_tool.ui.styles import custom_style
+    from simulation_service_tool.menus.image_pull import (
+        _image_exists_locally,
+        _get_kind_cluster_name,
+        _kind_load_images,
+    )
+
+    green  = "\033[32m"
+    yellow = "\033[33m"
+    red    = "\033[31m"
+    bold   = "\033[1m"
+    dim    = "\033[2m"
+    reset  = "\033[0m"
+
+    print(f"{bold}K8s node image check{reset}")
+    print("─" * 44)
+
+    nodes = _get_k8s_node_containers()
+    if not nodes:
+        print(f"  {'Nodes':<28} {yellow}○ could not list nodes{reset}")
+        print("─" * 44)
+        print()
+        return
+
+    # Check all nodes in parallel
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(nodes), 8)) as pool:
+        futures = {pool.submit(_image_on_node, n, _AGENT_IMAGE): n for n in nodes}
+        node_status = {}
+        for fut in futures:
+            node_status[futures[fut]] = fut.result()
+
+    missing_nodes = [n for n, ok in node_status.items() if not ok]
+    present_nodes = [n for n, ok in node_status.items() if ok]
+
+    # Only print worker nodes (skip control-plane in the per-row output to
+    # keep the table short), but still check them.
+    workers = [n for n in nodes if "worker" in n.lower() or "node" in n.lower()]
+    control = [n for n in nodes if n not in workers]
+
+    # Summary row for workers
+    missing_workers = [n for n in workers if n in missing_nodes]
+    present_workers = [n for n in workers if n in present_nodes]
+
+    if workers:
+        if not missing_workers:
+            print(f"  {'playwright-agent':<28} {green}● loaded on all {len(workers)} worker node(s){reset}")
+        else:
+            print(f"  {'playwright-agent':<28} {red}✗ missing on {len(missing_workers)}/{len(workers)} worker node(s){reset}")
+            for n in missing_workers[:4]:  # show at most 4 names
+                print(f"  {dim}    · {n}{reset}")
+            if len(missing_workers) > 4:
+                print(f"  {dim}    … and {len(missing_workers)-4} more{reset}")
+    else:
+        # No workers found — show per-node
+        for n in nodes[:5]:
+            ok = node_status.get(n, False)
+            sym = f"{green}●{reset}" if ok else f"{red}✗{reset}"
+            print(f"  {dim}{sym} {n}{reset}")
+
+    print("─" * 44)
+    print()
+
+    if not missing_nodes:
+        return
+
+    # Image is missing on some nodes — decide what to offer
+    local_ok = _image_exists_locally(_AGENT_IMAGE)
+
+    if not local_ok:
+        print(f"  {yellow}[WARN]{reset} playwright-agent is not loaded on all nodes and is also not")
+        print(f"  {dim}       found in the local Docker daemon.{reset}")
+        print(f"  Build it first:  docker build -t playwright-agent .")
+        print()
+        return
+
+    print(f"  {yellow}[WARN]{reset} playwright-agent exists locally but is {bold}not loaded{reset} into")
+    print(f"         {len(missing_nodes)} cluster node(s). Pods will fail with ErrImagePull.")
+    print()
+
+    try:
+        action = questionary.select(
+            "Load playwright-agent into kind nodes now?",
+            choices=[
+                questionary.Choice(
+                    title=f"Yes — kind load docker-image  ({len(missing_nodes)} node(s) missing)",
+                    value="load",
+                ),
+                questionary.Choice(title="Skip (I'll fix it later)", value="skip"),
+            ],
+            style=custom_style,
+        ).ask()
+    except (KeyboardInterrupt, Exception):
+        return
+
+    if action != "load":
+        return
+
+    cluster = _get_kind_cluster_name()
+    print(f"\n  Loading {_AGENT_IMAGE} into kind cluster '{cluster}'…\n")
+
+    # Re-use _kind_load_images by passing a synthetic failing-pod-like entry
+    fake_failing = [{"image": _AGENT_FULL}]
+    results = _kind_load_images(fake_failing)
+
+    ok_count = sum(1 for r in results if r["returncode"] == 0)
+    if ok_count == len(results):
+        print(f"\n  {green}✓{reset} Image loaded successfully into all nodes.\n")
+    else:
+        for r in results:
+            if r["returncode"] != 0:
+                print(f"\n  {red}[FAIL]{reset} {r.get('stderr','')[:120]}")
+        print(f"\n  {yellow}[WARN]{reset} Some nodes may still be missing the image.\n")
+
+
 def interactive_menu():
     # Step 1: K8s check — hard prerequisite, runs first.
     if not _early_k8s_check():
@@ -464,5 +742,10 @@ def interactive_menu():
     ok, results = _run_startup_diagnostics()
     if not ok:
         return
-    # Step 5: Main menu
+    # Step 5: Docker Compose health check — show status, prompt to confirm.
+    if not _run_docker_health_check():
+        return
+    # Step 6: K8s node image check — ensure playwright-agent is loaded.
+    _run_k8s_image_check()
+    # Step 7: Main menu
     welcome_menu()

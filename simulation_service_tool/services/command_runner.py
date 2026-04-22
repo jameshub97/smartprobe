@@ -2,7 +2,35 @@
 
 import os
 import re
+import shutil
 import subprocess
+
+# Directories added to PATH when locating binaries.  These are prepended to
+# whatever PATH the current process inherited so that tools installed via
+# Homebrew (macOS) or in /usr/local/bin are always found even when the parent
+# process was launched without those paths (e.g. from a GUI app or a service
+# supervisor that strips the user's shell PATH).
+_EXTRA_BIN_DIRS = [
+    '/opt/homebrew/bin',   # Apple-silicon Homebrew
+    '/usr/local/bin',      # Intel Homebrew / common Linux
+    '/usr/bin',
+    '/bin',
+]
+
+
+def _augmented_env() -> dict:
+    """Return os.environ with _EXTRA_BIN_DIRS prepended to PATH."""
+    env = os.environ.copy()
+    current = env.get('PATH', '')
+    extra = ':'.join(d for d in _EXTRA_BIN_DIRS if d not in current.split(':'))
+    env['PATH'] = f"{extra}:{current}" if extra else current
+    return env
+
+
+def _resolve_binary(name: str) -> str:
+    """Return the full path for *name*, searching _EXTRA_BIN_DIRS if needed."""
+    found = shutil.which(name, path=_augmented_env()['PATH'])
+    return found if found else name
 
 
 DEFAULT_NAMESPACE = os.environ.get('SIMULATION_K8S_NAMESPACE', 'default')
@@ -167,6 +195,9 @@ def run_cli_command(args, namespace=DEFAULT_NAMESPACE, timeout=None):
         return _completed_error(list(args), str(exc))
 
     command_timeout = timeout if timeout is not None else COMMAND_TIMEOUTS.get(prepared[0])
+    # Resolve the binary to its full path so the subprocess succeeds even when
+    # the parent process was started without Homebrew's bin dir on PATH.
+    prepared = [_resolve_binary(prepared[0]), *prepared[1:]]
     try:
         return subprocess.run(prepared, capture_output=True, text=True, shell=False, timeout=command_timeout)
     except FileNotFoundError as exc:

@@ -62,11 +62,13 @@ from simulation_service_tool.cli.commands import (
 from simulation_service_tool.menus.cleanup import cleanup_menu
 from simulation_service_tool.menus.presets import show_presets
 from simulation_service_tool.menus.diagnostics import diagnostics_menu
+from simulation_service_tool.menus.image_pull import image_pull_menu
 from simulation_service_tool.menus.docker import docker_menu
 from simulation_service_tool.menus.routine_checks import routine_checks_menu
 from simulation_service_tool.menus.monitoring import monitoring_menu
 from simulation_service_tool.menus.kueue import kueue_menu
 from simulation_service_tool.services.kill_switch import get_active_pods, kill_all_pods, nuke_all, probe_kill_switch_targets
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 def welcome_menu():
@@ -101,6 +103,7 @@ def welcome_menu():
                 questionary.Choice("Monitoring", value="monitoring"),
                 questionary.Choice("Kueue", value="kueue"),
                 questionary.Choice("Diagnostics", value="diagnostics"),
+                questionary.Choice("Image Pull Debugger", value="image_pull"),
                 questionary.Separator(),
                 questionary.Choice("Kill All Pods", value="kill"),
                 questionary.Separator(),
@@ -120,6 +123,7 @@ def welcome_menu():
                 questionary.Choice("Monitoring", value="monitoring"),
                 questionary.Choice("Kueue", value="kueue"),
                 questionary.Choice("Diagnostics", value="diagnostics"),
+                questionary.Choice("Image Pull Debugger", value="image_pull"),
                 questionary.Separator(),
                 questionary.Choice("Kill All Pods", value="kill"),
                 questionary.Separator(),
@@ -141,7 +145,7 @@ def welcome_menu():
 
             if actionable_drift:
                 choices = [
-                    questionary.Choice("Fix All Drift Issues (recommended)", value="fix_drift"),
+                    questionary.Choice("Fix All Residual Data (recommended)", value="fix_drift"),
                     questionary.Choice("Start a Test", value="start_test"),
                     questionary.Choice("Stop a Test", value="stop_test"),
                     questionary.Choice("Watch Progress", value="watch"),
@@ -152,6 +156,7 @@ def welcome_menu():
                     questionary.Choice("Monitoring", value="monitoring"),
                     questionary.Choice("Kueue", value="kueue"),
                     questionary.Choice("Diagnostics", value="diagnostics"),
+                    questionary.Choice("Image Pull Debugger", value="image_pull"),
                     questionary.Separator(),
                     questionary.Choice("Kill All Pods", value="kill"),
                     questionary.Separator(),
@@ -172,6 +177,7 @@ def welcome_menu():
                     questionary.Choice("Monitoring", value="monitoring"),
                     questionary.Choice("Kueue", value="kueue"),
                     questionary.Choice("Diagnostics", value="diagnostics"),
+                    questionary.Choice("Image Pull Debugger", value="image_pull"),
                     questionary.Separator(),
                     questionary.Choice("Kill All Pods", value="kill"),
                     questionary.Separator(),
@@ -210,6 +216,7 @@ def _handle_welcome_choice(choice, service_running, cluster_initialized, needs_c
         'monitoring':  lambda: monitoring_menu(),
         'kueue':       lambda: kueue_menu(),
         'diagnostics': lambda: diagnostics_menu(service_running),
+        'image_pull':  lambda: image_pull_menu(),
         'kill':        lambda: _kill_switch_action(),
         'fix_drift':   lambda: _fix_drift(drift_findings, service_running),
     }
@@ -326,7 +333,7 @@ def _fix_drift(findings, service_running):
 
     warnings = [f for f in findings if f['severity'] in ('warning', 'error')]
     if not warnings:
-        print("\n  [OK] No drift issues to fix.")
+        print("\n  [OK] No residual data to fix.")
         _prompt_go_back()
         return
 
@@ -338,20 +345,12 @@ def _fix_drift(findings, service_running):
         print(f"  {status} {check}: {detail}")
 
     if all_fixed:
-        print("\n  [OK] All drift issues resolved. Baseline restored.")
+        print("\n  [OK] All residual data cleared.")
     else:
         print("\n  [WARN] Some issues could not be auto-fixed.")
         print("  Open Diagnostics or Re-initialize for a full reset.")
 
     _prompt_go_back()
-
-
-def _prompt_go_back():
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
 
 
 def test_operations_menu(service_running):

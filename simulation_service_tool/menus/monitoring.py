@@ -15,14 +15,7 @@ from simulation_service_tool.services.monitoring import (
     get_prometheus_targets,
     apply_servicemonitor,
 )
-
-
-def _prompt_continue():
-    questionary.select(
-        "Next:",
-        choices=[questionary.Choice(title="Continue", value="continue")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_continue
 
 
 def monitoring_menu():

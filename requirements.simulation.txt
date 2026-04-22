@@ -5,3 +5,4 @@ click
 rich
 questionary
 requests
+prometheus-client

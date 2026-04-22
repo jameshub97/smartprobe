@@ -18,6 +18,11 @@ def _mock_runtime_gates(monkeypatch):
     # it up.
     from simulation_service_tool.services import k8s_connectivity
     monkeypatch.setattr(k8s_connectivity, 'k8s_reachable', lambda *a, **kw: 'reachable')
+    # The registry / mirror / node-image probes do real network/docker calls;
+    # default them to healthy so tests don't require a running registry or cluster.
+    monkeypatch.setattr(smart_diagnostics, '_local_registry_reachable', lambda: True)
+    monkeypatch.setattr(smart_diagnostics, '_registry_mirror_fix_applied', lambda node: True)
+    monkeypatch.setattr(smart_diagnostics, '_node_has_agent_image', lambda node: True)
 
 
 def _stub_verify_state(overrides=None):
@@ -201,9 +206,12 @@ def test_auto_remediate_service_offline_restarts(monkeypatch):
         health_calls.append(1)
         return len(health_calls) > 1  # Fail first, succeed on retry
 
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', fake_check)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {'in_use': False})
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: None)
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', lambda *a, **kw: FakeResult())
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     finding = {'severity': 'info', 'check': 'service_offline', 'summary': 'x', 'remediation': 'y', 'action': 'start_service'}
@@ -221,39 +229,44 @@ def test_restart_service_skips_when_already_healthy(monkeypatch):
     assert 'already healthy' in detail.lower()
 
 
-def test_restart_service_kills_stale_port(monkeypatch):
+def test_restart_service_calls_docker_compose_restart(monkeypatch):
     health_calls = []
 
     def fake_check():
         health_calls.append(1)
-        return len(health_calls) > 2  # Fail initial + first retry, succeed second
+        return len(health_calls) > 2  # Fail initial check; succeed on second poll
+
+    run_calls = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
+    def fake_run(args, **kw):
+        run_calls.append(args)
+        return FakeResult()
 
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', fake_check)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {
-        'in_use': True,
-        'processes': [{'pid': '1234', 'command': 'python3'}],
-    })
-    killed = []
-    monkeypatch.setattr('simulation_service_tool.menus.ports.kill_port', lambda p: (killed.append(p) or {'killed_pids': ['1234'], 'failed_pids': []}))
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: None)
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', fake_run)
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     success, detail = smart_diagnostics._restart_service()
     assert success is True
-    assert killed == ['5002']
+    assert any('docker' in str(a) for a in run_calls)
 
 
-def test_restart_service_fails_when_port_blocked(monkeypatch):
+def test_restart_service_fails_when_docker_compose_fails(monkeypatch):
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', lambda: False)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {
-        'in_use': True,
-        'processes': [{'pid': '1234', 'command': 'python3'}],
-    })
-    monkeypatch.setattr('simulation_service_tool.menus.ports.kill_port', lambda p: {'failed_pids': ['1234']})
+
+    class FakeResult:
+        returncode = 1
+        stderr = 'container not found'
+
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', lambda *a, **kw: FakeResult())
 
     success, detail = smart_diagnostics._restart_service()
     assert success is False
-    assert '1234' in detail
+    assert 'container not found' in detail
 
 
 def test_remediate_all_deduplicates_actions(monkeypatch):
@@ -282,8 +295,15 @@ def test_remediate_all_runs_service_restart_last(monkeypatch):
         return len(health_calls) > 1
 
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', fake_check)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {'in_use': False})
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: action_order.append('start'))
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
+    def fake_run(args, **kw):
+        action_order.append('start')
+        return FakeResult()
+
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', fake_run)
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     findings = [
@@ -311,31 +331,38 @@ def test_remediate_all_handles_service_action(monkeypatch):
 
 
 def test_restart_service_starts_when_port_free(monkeypatch):
-    """Port not in use — spawns the process, health check passes on first poll."""
+    """docker compose restart succeeds; health check passes on first poll."""
     health_calls = []
 
     def fake_check():
         health_calls.append(1)
         return len(health_calls) > 1  # Fail initial check, pass on first retry
 
-    started = []
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
+    run_calls = []
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', fake_check)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {'in_use': False})
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: started.append(a[0]))
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', lambda *a, **kw: (run_calls.append(a[0]) or FakeResult()))
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     success, detail = smart_diagnostics._restart_service()
 
     assert success is True
     assert 'healthy' in detail.lower()
-    assert len(started) == 1
+    assert len(run_calls) == 1
 
 
 def test_restart_service_times_out_when_never_healthy(monkeypatch):
-    """Service spawned successfully but never passes the health check within retries."""
+    """docker compose restart succeeds but container never passes health check."""
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', lambda: False)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {'in_use': False})
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: None)
+
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', lambda *a, **kw: FakeResult())
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     success, detail = smart_diagnostics._restart_service()
@@ -354,9 +381,12 @@ def test_restart_service_returns_false_on_keyboard_interrupt(monkeypatch):
             raise KeyboardInterrupt
         return False
 
+    class FakeResult:
+        returncode = 0
+        stderr = ''
+
     monkeypatch.setattr('simulation_service_tool.services.api_client.check_service', fake_check)
-    monkeypatch.setattr('simulation_service_tool.menus.ports.get_port_status', lambda p: {'in_use': False})
-    monkeypatch.setattr(smart_diagnostics.subprocess, 'Popen', lambda *a, **kw: None)
+    monkeypatch.setattr(smart_diagnostics.subprocess, 'run', lambda *a, **kw: FakeResult())
     monkeypatch.setattr(smart_diagnostics.time, 'sleep', lambda _: None)
 
     success, detail = smart_diagnostics._restart_service()
@@ -392,3 +422,187 @@ def test_run_drift_checks_no_compose_warning_when_file_exists(monkeypatch):
 
     compose_findings = [f for f in findings if f['check'] == 'compose_file_missing']
     assert compose_findings == []
+
+
+# ── New feedback loop: local registry down ───────────────────────────────────
+
+class TestLocalRegistryDriftCheck:
+    def _base_patch(self, monkeypatch):
+        monkeypatch.setattr(smart_diagnostics, 'direct_verify_state', lambda: _stub_verify_state())
+        monkeypatch.setattr(smart_diagnostics, 'get_test_releases', lambda: [])
+        monkeypatch.setattr(smart_diagnostics, 'run_cli_command', lambda *a, **kw: _CmdResult())
+        # Default: mirror ok, node has image — isolate the registry check
+        monkeypatch.setattr(smart_diagnostics, '_registry_mirror_fix_applied', lambda n: True)
+        monkeypatch.setattr(smart_diagnostics, '_node_has_agent_image', lambda n: True)
+        monkeypatch.setattr(smart_diagnostics, '_first_kind_worker', lambda: 'desktop-worker')
+
+    def test_registry_down_surfaces_error_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_local_registry_reachable', lambda: False)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        reg_findings = [f for f in findings if f['check'] == 'local_registry_down']
+        assert len(reg_findings) == 1
+        assert reg_findings[0]['severity'] == 'error'
+        assert reg_findings[0]['action'] == 'start_local_registry'
+
+    def test_registry_up_no_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_local_registry_reachable', lambda: True)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        assert not any(f['check'] == 'local_registry_down' for f in findings)
+
+    def test_auto_remediate_starts_existing_container(self, monkeypatch):
+        runs = []
+
+        def fake_run(args, **kwargs):
+            runs.append(args)
+
+            class R:
+                returncode = 0
+                stdout = ''
+                stderr = ''
+            return R()
+
+        monkeypatch.setattr(smart_diagnostics.subprocess, 'run', fake_run)
+
+        finding = {
+            'check': 'local_registry_down',
+            'action': 'start_local_registry',
+            'severity': 'error',
+            'summary': '',
+            'remediation': '',
+        }
+        success, detail = smart_diagnostics.auto_remediate(finding)
+        assert success is True
+        assert 'started' in detail.lower() or 'created' in detail.lower()
+        assert any('docker' in a[0] for a in runs)
+
+
+# ── New feedback loop: registry mirror HTTP mismatch ─────────────────────────
+
+class TestRegistryMirrorDriftCheck:
+    def _base_patch(self, monkeypatch):
+        monkeypatch.setattr(smart_diagnostics, 'direct_verify_state', lambda: _stub_verify_state())
+        monkeypatch.setattr(smart_diagnostics, 'get_test_releases', lambda: [])
+        monkeypatch.setattr(smart_diagnostics, 'run_cli_command', lambda *a, **kw: _CmdResult())
+        # Default: registry up, node has image — isolate the mirror check
+        monkeypatch.setattr(smart_diagnostics, '_local_registry_reachable', lambda: True)
+        monkeypatch.setattr(smart_diagnostics, '_node_has_agent_image', lambda n: True)
+        monkeypatch.setattr(smart_diagnostics, '_first_kind_worker', lambda: 'desktop-worker')
+
+    def test_mirror_not_fixed_surfaces_error_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_registry_mirror_fix_applied', lambda n: False)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        mirror_findings = [f for f in findings if f['check'] == 'registry_mirror_misconfig']
+        assert len(mirror_findings) == 1
+        assert mirror_findings[0]['severity'] == 'error'
+        assert mirror_findings[0]['action'] == 'fix_registry_mirror'
+
+    def test_mirror_fixed_no_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_registry_mirror_fix_applied', lambda n: True)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        assert not any(f['check'] == 'registry_mirror_misconfig' for f in findings)
+
+    def test_mirror_none_when_no_nodes_no_finding(self, monkeypatch):
+        """When no worker nodes are visible, mirror check returns None — should not surface."""
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_first_kind_worker', lambda: None)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        assert not any(f['check'] == 'registry_mirror_misconfig' for f in findings)
+
+    def test_auto_remediate_calls_patch_all_nodes(self, monkeypatch):
+        patch_calls = []
+        monkeypatch.setattr(
+            'simulation_service_tool.menus.image_pull._run_patch_all_nodes',
+            lambda: (patch_calls.append(1) or (3, 3)),
+        )
+
+        finding = {
+            'check': 'registry_mirror_misconfig',
+            'action': 'fix_registry_mirror',
+            'severity': 'error',
+            'summary': '',
+            'remediation': '',
+        }
+        success, detail = smart_diagnostics.auto_remediate(finding)
+        assert success is True
+        assert '3' in detail
+        assert patch_calls == [1]
+
+
+# ── New feedback loop: node image missing ────────────────────────────────────
+
+class TestNodeImageMissingDriftCheck:
+    def _base_patch(self, monkeypatch):
+        monkeypatch.setattr(smart_diagnostics, 'direct_verify_state', lambda: _stub_verify_state())
+        monkeypatch.setattr(smart_diagnostics, 'get_test_releases', lambda: [])
+        monkeypatch.setattr(smart_diagnostics, 'run_cli_command', lambda *a, **kw: _CmdResult())
+        # Default: registry up, mirror ok — isolate the node image check
+        monkeypatch.setattr(smart_diagnostics, '_local_registry_reachable', lambda: True)
+        monkeypatch.setattr(smart_diagnostics, '_registry_mirror_fix_applied', lambda n: True)
+        monkeypatch.setattr(smart_diagnostics, '_first_kind_worker', lambda: 'desktop-worker')
+
+    def test_image_missing_surfaces_warning_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_node_has_agent_image', lambda n: False)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        img_findings = [f for f in findings if f['check'] == 'node_image_missing']
+        assert len(img_findings) == 1
+        assert img_findings[0]['severity'] == 'warning'
+        assert img_findings[0]['action'] == 'kind_load_image'
+
+    def test_image_present_no_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_node_has_agent_image', lambda n: True)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        assert not any(f['check'] == 'node_image_missing' for f in findings)
+
+    def test_image_none_when_no_nodes_no_finding(self, monkeypatch):
+        self._base_patch(monkeypatch)
+        monkeypatch.setattr(smart_diagnostics, '_first_kind_worker', lambda: None)
+
+        findings = smart_diagnostics.run_drift_checks(service_running=True)
+
+        assert not any(f['check'] == 'node_image_missing' for f in findings)
+
+    def test_auto_remediate_kind_load(self, monkeypatch):
+        runs = []
+
+        def fake_run(args, **kwargs):
+            runs.append(args)
+
+            class R:
+                returncode = 0
+                stdout = 'Image loaded'
+                stderr = ''
+            return R()
+
+        monkeypatch.setattr(smart_diagnostics.subprocess, 'run', fake_run)
+
+        finding = {
+            'check': 'node_image_missing',
+            'action': 'kind_load_image',
+            'severity': 'warning',
+            'summary': '',
+            'remediation': '',
+        }
+        success, detail = smart_diagnostics.auto_remediate(finding)
+        assert success is True
+        assert 'playwright-agent' in detail
+        assert any('kind' in ' '.join(a) for a in runs)

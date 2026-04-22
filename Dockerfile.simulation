@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.simulation.txt
 # Copy simulation service code
 COPY simulation_service.py ./
 COPY simulation_service_tool/ ./simulation_service_tool/
+COPY dashboard/ ./dashboard/
 
 ENV FLASK_APP=simulation_service
 ENV PYTHONUNBUFFERED=1

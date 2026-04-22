@@ -1,8 +1,8 @@
 replicaCount: 1
 image:
-  repository: mcr.microsoft.com/playwright
-  tag: v1.40.0-focal
-  pullPolicy: IfNotPresent
+  repository: host.docker.internal:5050/playwright-agent
+  tag: latest
+  pullPolicy: Always
 
 persona: default
 targetUrl: http://host.docker.internal:5173
@@ -32,6 +32,13 @@ workersPerPod: 10
 backoffLimit: 2
 ttlSecondsAfterFinished: 3600
 commandOverride: ""
+probeMode: "transactional"
+# URL for the basic ping probe (PROBE_MODE=basic). Leave empty to use TARGET_URL.
+probeUrl: ""
+# Transactional mode: number of rounds each agent runs before exiting
+agentRounds: 3
+# Transactional mode: seconds to sleep between rounds (re-login happens before each)
+roundSleep: 30
 
 statefulset:
   enabled: false

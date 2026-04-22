@@ -14,20 +14,14 @@ from simulation_service_tool.services.docker_compose import (
     is_docker_available,
     is_compose_running,
     up,
+    up_streaming,
     down,
     get_service_health,
     get_logs,
     test_endpoints,
     EXPECTED_SERVICES,
 )
-
-
-def _prompt_go_back():
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 def _docker_issue(summary, remediation):
@@ -236,16 +230,147 @@ def _handle_running_choice(option, services):
         _do_down(volumes=True)
 
 
+_TRANSIENT_BUILD_ERRORS = [
+    ('429 Too Many Requests', (
+        "MCR (Microsoft Container Registry) is rate-limiting requests.\n"
+        "  This is temporary — wait a minute and retry."
+    )),
+    ('429', (
+        "A registry returned HTTP 429 (Too Many Requests).\n"
+        "  This is temporary — wait a moment and retry."
+    )),
+    ('failed to resolve source metadata', (
+        "Docker could not fetch image metadata from the registry.\n"
+        "  This is usually a transient network or rate-limit issue — retry."
+    )),
+    ('i/o timeout', (
+        "Network I/O timed out while pulling a base image.\n"
+        "  Check your internet connection, then retry."
+    )),
+    ('no such host', (
+        "DNS resolution failed for a registry hostname.\n"
+        "  Check your internet connection, then retry."
+    )),
+]
+
+_INSECURE_REGISTRY_ERROR = 'http: server gave http response to https client'
+_INSECURE_REGISTRY = 'host.docker.internal:5050'
+
+
+def _classify_build_error(error: str):
+    """Return (hint, is_transient) for a known build error, or (None, False)."""
+    lower = (error or '').lower()
+    for pattern, hint in _TRANSIENT_BUILD_ERRORS:
+        if pattern.lower() in lower:
+            return hint, True
+    return None, False
+
+
+def _is_insecure_registry_build_error(error: str) -> bool:
+    return _INSECURE_REGISTRY_ERROR in (error or '').lower()
+
+
 def _do_up(build=False):
     clear_screen()
     action = "Building and starting" if build else "Starting"
     print(f"\n  {action} Docker Compose stack...\n")
-    result = up(build=build, detach=True)
+    # Use streaming for builds so progress is visible in real time.
+    run = up_streaming if build else up
+    result = run(build=build, detach=True)
     if result['success']:
         print("  [OK] Docker stack started.\n")
+        _prompt_go_back()
+        return
+
+    err = result.get('error', 'Unknown error')
+
+    if not build:
+        # Non-build failure — just show error
+        print(f"  [FAIL] {err}\n")
+        _prompt_go_back()
+        return
+
+    # ── insecure-registry error ──────────────────────────────────────────────
+    if _is_insecure_registry_build_error(err):
+        from simulation_service_tool.menus.image_pull import (
+            _is_insecure_registry_configured,
+            _fix_insecure_registry_interactive,
+            _restart_docker_desktop,
+            _wait_for_docker,
+        )
+        import sys as _sys
+        print()
+        print(f"  [WARN] Docker is trying HTTPS for the local registry ({_INSECURE_REGISTRY}).")
+        print(f"  The registry uses plain HTTP — add it to Docker's insecure registries.\n")
+
+        already = _is_insecure_registry_configured(_INSECURE_REGISTRY)
+        choices = []
+        if not already:
+            choices.append(questionary.Choice(
+                title="Fix insecure registry & retry  (patch daemon.json + restart Docker Desktop)",
+                value="fix_and_retry",
+            ))
+        else:
+            choices.append(questionary.Choice(
+                title="Restart Docker Desktop & retry  (setting already applied)",
+                value="restart_and_retry",
+            ))
+        choices.append(questionary.Choice(title="Retry build", value="retry"))
+        choices.append(questionary.Choice(title="Go back", value="back"))
+
+        action_choice = questionary.select("Next step:", choices=choices, style=custom_style).ask()
+
+        if action_choice in ("fix_and_retry", "restart_and_retry"):
+            if action_choice == "fix_and_retry":
+                fixed = _fix_insecure_registry_interactive(_INSECURE_REGISTRY)
+            else:
+                if _sys.platform == "darwin":
+                    print("\n  Restarting Docker Desktop…")
+                    _restart_docker_desktop()
+                    print("  Waiting for Docker daemon…", end="", flush=True)
+                    ready = _wait_for_docker(timeout=90)
+                    print(" ready" if ready else " timed out")
+                    fixed = ready
+                else:
+                    fixed = True  # non-macOS: just retry
+            if fixed:
+                _do_up(build=build)
+            else:
+                _prompt_go_back()
+            return
+
+        if action_choice == "retry":
+            _do_up(build=build)
+            return
+
+        # "back"
+        return
+
+    # ── other build failures ─────────────────────────────────────────────────
+    hint, is_transient = _classify_build_error(err)
+
+    # Build failure — err already printed live; show concise summary + hint
+    print()
+    if hint:
+        print(f"  [WARN] {hint}\n")
     else:
-        print(f"  [FAIL] {result.get('error', 'Unknown error')}\n")
-    _prompt_go_back()
+        # Show last meaningful line of error if not already on screen
+        last = next((ln for ln in reversed(err.splitlines()) if ln.strip()), err)
+        print(f"  [FAIL] {last[:200]}\n")
+
+    choices = []
+    if is_transient:
+        choices.append(questionary.Choice(title="Retry build", value="retry"))
+    choices.append(questionary.Choice(title="Go back", value="back"))
+
+    action_choice = questionary.select(
+        "Next step:",
+        choices=choices,
+        style=custom_style,
+    ).ask()
+
+    if action_choice == "retry":
+        _do_up(build=build)
 
 
 def _do_down(volumes=False):

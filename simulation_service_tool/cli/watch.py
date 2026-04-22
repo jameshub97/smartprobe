@@ -48,6 +48,14 @@ def _print_watch_failure_guidance(release_name, error_text):
 
 def watch_release_pods_kubectl(release_name, max_retries=3, retry_delay=5):
     """Watch pods for a specific release via kubectl -w."""
+    import shutil
+    if not shutil.which('kubectl'):
+        print("\n[33m[WARN][0m kubectl not found in PATH — cannot watch pods live.")
+        print(f"       Check status manually with:")
+        print(f"         kubectl get pods -l release={release_name}")
+        _prompt_go_back("Return to main menu")
+        return
+
     print(f"\nWatching Kubernetes pods for release: {release_name}")
     print("(Press Ctrl+C to return to main menu)\n")
     try:

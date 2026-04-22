@@ -46,6 +46,7 @@ To add a new drift check
   4. Add a test in ``tests/test_smart_diagnostics.py`` mocking the new probe.
 """
 
+import os
 import socket
 import subprocess
 import sys
@@ -57,6 +58,71 @@ from simulation_service_tool.services.direct_cleanup import (
     direct_verify_state,
     get_test_releases,
 )
+
+# ---------------------------------------------------------------------------
+# Probes for new feedback loops
+# ---------------------------------------------------------------------------
+
+_LOCAL_REGISTRY_HOST = 'localhost'
+_LOCAL_REGISTRY_PORT = 5050
+_LOCAL_REGISTRY_CONTAINER = 'local-registry'
+_AGENT_IMAGE_BARE = 'playwright-agent'
+_REGISTRY_HOSTS_TOML_MARKER = 'http://host.docker.internal:5050'
+_CERTS_D_PATH = '/etc/containerd/certs.d/host.docker.internal:5050/hosts.toml'
+
+
+def _local_registry_reachable() -> bool:
+    """TCP probe: is the local registry container listening on :5050?"""
+    try:
+        with socket.create_connection((_LOCAL_REGISTRY_HOST, _LOCAL_REGISTRY_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _first_kind_worker() -> str | None:
+    """Return the docker container name of the first kind worker node, or None."""
+    try:
+        r = subprocess.run(
+            ['docker', 'ps', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5,
+        )
+        for name in r.stdout.splitlines():
+            name = name.strip()
+            if 'worker' in name:
+                return name
+        return None
+    except Exception:
+        return None
+
+
+def _registry_mirror_fix_applied(node: str) -> bool:
+    """Return True if the certs.d HTTP override is already written on *node*.
+
+    Checks for the presence of the marker string inside the hosts.toml file.
+    """
+    try:
+        r = subprocess.run(
+            ['docker', 'exec', node, 'cat', _CERTS_D_PATH],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0 and _REGISTRY_HOSTS_TOML_MARKER in r.stdout
+    except Exception:
+        return False
+
+
+def _node_has_agent_image(node: str) -> bool:
+    """Return True if playwright-agent is loaded in *node*'s containerd store."""
+    try:
+        r = subprocess.run(
+            ['docker', 'exec', node, 'crictl', 'images', '--output', 'json'],
+            capture_output=True, text=True, timeout=8,
+        )
+        if r.returncode != 0:
+            return True  # can't determine — don't false-alarm
+        return _AGENT_IMAGE_BARE in r.stdout
+    except Exception:
+        return True  # can't determine — don't false-alarm
 
 
 def _finding(severity, check, summary, remediation, action=None):
@@ -169,14 +235,43 @@ def run_drift_checks(service_running=None):
             timeout=5,
         )
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    def _image_pull_pods():
+        """Return wide pod list to detect ErrImagePull / ImagePullBackOff statuses."""
+        return run_cli_command(
+            ["kubectl", "get", "pods", "-l", "app=playwright-agent", "--no-headers"],
+            timeout=5,
+        )
+
+    def _probe_registry_mirror():
+        """Check if the HTTP override is applied on at least one worker node."""
+        node = _first_kind_worker()
+        if node is None:
+            return None  # no workers visible — skip
+        return _registry_mirror_fix_applied(node)
+
+    def _probe_node_image():
+        """Check if playwright-agent is loaded on at least one worker node."""
+        node = _first_kind_worker()
+        if node is None:
+            return None  # no workers visible — skip
+        return _node_has_agent_image(node)
+
+    with ThreadPoolExecutor(max_workers=7) as pool:
         f_state = pool.submit(direct_verify_state)
         f_stale = pool.submit(_stale_pods)
         f_sick = pool.submit(_sick_pods)
+        f_imgpull = pool.submit(_image_pull_pods)
+        f_registry = pool.submit(_local_registry_reachable)
+        f_mirror = pool.submit(_probe_registry_mirror)
+        f_nodeimg = pool.submit(_probe_node_image)
 
         state = f_state.result(timeout=15)
         pod_result = f_stale.result(timeout=10)
         sick_result = f_sick.result(timeout=10)
+        imgpull_result = f_imgpull.result(timeout=10)
+        registry_up = f_registry.result(timeout=5)
+        mirror_ok = f_mirror.result(timeout=10)
+        node_has_image = f_nodeimg.result(timeout=12)
 
     if state.get('helm_test_releases', 0) > 0:
         releases = get_test_releases()
@@ -208,16 +303,74 @@ def run_drift_checks(service_running=None):
             action='clean_orphans',
         ))
 
-    # --- Pod drift (residual pods from finished/failed tests) ---
-    if pod_result.returncode == 0 and pod_result.stdout.strip():
-        stale_pods = pod_result.stdout.strip().split()
+    # --- Local registry reachability ---
+    # Pods pull from host.docker.internal:5050; if the registry container is down
+    # every new test will immediately ErrImagePull.
+    if not registry_up:
+        findings.append(_finding(
+            severity='error',
+            check='local_registry_down',
+            summary='Local registry (localhost:5050) is not reachable',
+            remediation='Start the registry container: docker start local-registry  (or docker run -d -p 5050:5000 --name local-registry registry:2)',
+            action='start_local_registry',
+        ))
+
+    # --- containerd mirror HTTP mismatch ---
+    # Docker Desktop's built-in registry-mirror always tries HTTPS for
+    # host.docker.internal:5050.  Without the certs.d override, every pod
+    # pull will get a 500 from the mirror → ErrImagePull.
+    # mirror_ok is None when no worker nodes are visible (skip silently).
+    if mirror_ok is False:
+        findings.append(_finding(
+            severity='error',
+            check='registry_mirror_misconfig',
+            summary='containerd mirror will reject pulls from host.docker.internal:5050 (HTTPS vs HTTP)',
+            remediation='Write the HTTP override (certs.d hosts.toml) on all nodes — use "Fix All" or Image Pull Debugger.',
+            action='fix_registry_mirror',
+        ))
+
+    # --- playwright-agent image missing from nodes ---
+    # Even if the registry mirror is fixed, if the image was never pushed to the
+    # local registry (or the cluster was recreated), pods will still fail.
+    # node_has_image is None when no worker nodes are visible (skip silently).
+    if node_has_image is False:
         findings.append(_finding(
             severity='warning',
-            check='residual_pods',
-            summary=f"{len(stale_pods)} non-running pod(s) left behind",
-            remediation='Clean residual pods to keep the cluster tidy.',
-            action='clean_orphans',
+            check='node_image_missing',
+            summary=f"playwright-agent image not found on kind worker nodes",
+            remediation='Load the image: kind load docker-image playwright-agent  (or push to registry and pods will pull it).',
+            action='kind_load_image',
         ))
+
+    # --- Image pull errors (dedicated check — wrong image / registry issue) ---
+    ip_pod_names: set = set()
+    if imgpull_result.returncode == 0 and imgpull_result.stdout.strip():
+        ip_pod_names = {
+            line.split()[0]
+            for line in imgpull_result.stdout.strip().splitlines()
+            if line.strip() and any(s in line for s in ('ErrImagePull', 'ImagePullBackOff'))
+        }
+        if ip_pod_names:
+            findings.append(_finding(
+                severity='error',
+                check='image_pull_errors',
+                summary=f"{len(ip_pod_names)} pod(s) stuck on ErrImagePull / ImagePullBackOff",
+                remediation='Use Image Pull Debugger to push the image to the local registry and restart pods.',
+                action='fix_image_pull',
+            ))
+
+    # --- Pod drift (residual pods from finished/failed tests) ---
+    # Exclude image-pull pods — those have their own dedicated finding above.
+    if pod_result.returncode == 0 and pod_result.stdout.strip():
+        stale_pods = [p for p in pod_result.stdout.strip().split() if p not in ip_pod_names]
+        if stale_pods:
+            findings.append(_finding(
+                severity='warning',
+                check='residual_pods',
+                summary=f"{len(stale_pods)} non-running pod(s) left behind",
+                remediation='Clean residual pods to keep the cluster tidy.',
+                action='clean_orphans',
+            ))
 
     # --- Unhealthy running pods ---
     if sick_result.returncode == 0 and sick_result.stdout.strip():
@@ -330,6 +483,63 @@ def auto_remediate(finding, service_running=None):
             return True, 'Kubernetes API recovered — switched to a working context'
         return False, 'Kubernetes API recovery failed — see diagnostic details above'
 
+    if action == 'fix_image_pull':
+        from simulation_service_tool.menus.image_pull import image_pull_menu
+        image_pull_menu()
+        return True, 'Image Pull Debugger closed'
+
+    if action == 'fix_registry_mirror':
+        from simulation_service_tool.menus.image_pull import _run_patch_all_nodes
+        ok, total = _run_patch_all_nodes()
+        if total == 0:
+            return False, 'No kind nodes found — is the cluster running?'
+        if ok == total:
+            return True, f'HTTP override written on all {total} node(s) — mirror bypassed'
+        return False, f'Patched {ok}/{total} node(s) — check docker exec permissions'
+
+    if action == 'start_local_registry':
+        try:
+            r = subprocess.run(
+                ['docker', 'start', _LOCAL_REGISTRY_CONTAINER],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return True, f'Registry container "{_LOCAL_REGISTRY_CONTAINER}" started'
+            # Container doesn't exist — create it
+            r2 = subprocess.run(
+                ['docker', 'run', '-d', '-p', f'{_LOCAL_REGISTRY_PORT}:5000',
+                 '--name', _LOCAL_REGISTRY_CONTAINER, '--restart', 'always', 'registry:2'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r2.returncode == 0:
+                return True, 'Registry container created and started on port 5050'
+            return False, (r2.stderr or r2.stdout or '').strip()[:120]
+        except Exception as exc:
+            return False, str(exc)
+
+    if action == 'kind_load_image':
+        try:
+            cluster_r = subprocess.run(
+                ['kind', 'get', 'clusters'],
+                capture_output=True, text=True, timeout=10,
+            )
+            clusters = [c.strip() for c in cluster_r.stdout.splitlines() if c.strip()]
+            cluster = clusters[0] if clusters else 'kind'
+        except Exception:
+            cluster = 'kind'
+        try:
+            r = subprocess.run(
+                ['kind', 'load', 'docker-image', _AGENT_IMAGE_BARE, '--name', cluster],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode == 0:
+                return True, f'Image "{_AGENT_IMAGE_BARE}" loaded into cluster "{cluster}"'
+            return False, (r.stderr or r.stdout or '').strip()[:120]
+        except FileNotFoundError:
+            return False, 'kind not found in PATH'
+        except Exception as exc:
+            return False, str(exc)
+
     return False, 'No auto-fix available.'
 
 
@@ -340,34 +550,30 @@ def _restart_service():
     Returns (success: bool, detail: str).
     """
     from simulation_service_tool.services.api_client import check_service
-    from simulation_service_tool.menus.ports import get_port_status, kill_port
 
     if check_service():
         return True, 'Service is already healthy'
 
-    port_status = get_port_status('5002')
-    if port_status.get('in_use'):
-        kill_result = kill_port('5002')
-        if kill_result.get('failed_pids'):
-            return False, f"Could not release port 5002 (PIDs: {', '.join(kill_result['failed_pids'])})"
-        time.sleep(0.5)
-
-    subprocess.Popen(
-        [sys.executable, "simulation_service.py", "server", "--port", "5002"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
+    # The simulation service is managed by docker compose — never spawn it as a
+    # native Python process, which would create a split-brain on port 5002.
+    result = subprocess.run(
+        ['docker', 'compose', 'restart', 'simulation'],
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     )
+    if result.returncode != 0:
+        return False, f"docker compose restart failed: {result.stderr.strip() or 'unknown error'}"
 
     try:
-        for _ in range(4):
-            time.sleep(1)
+        for _ in range(10):
+            time.sleep(2)
             if check_service():
-                return True, 'Service restarted and healthy'
+                return True, 'Simulation container restarted and healthy'
     except KeyboardInterrupt:
         return False, 'Cancelled while waiting for service to start'
 
-    return False, 'Service started but not responding yet — check Diagnostics -> Service Health'
+    return False, 'Container restarted but not responding yet — check `docker compose logs simulation`'
 
 
 def remediate_all(findings, service_running=None):

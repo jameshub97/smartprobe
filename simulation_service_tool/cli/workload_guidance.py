@@ -1,22 +1,18 @@
 """StatefulSet-to-Job guidance flows used by diagnostics."""
 
-import json
 from pathlib import Path
 import re
 
 import questionary
 
 from simulation_service_tool.cli.prompts import _prompt_go_back
+from simulation_service_tool.cli.snapshots import _kubectl_get_json
 from simulation_service_tool.services.command_runner import run_cli_command
 from simulation_service_tool.ui.styles import custom_style
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HELM_FIXES_DIR = PROJECT_ROOT / 'helm-fixes'
-
-
-def _run_command(args, timeout=None):
-    return run_cli_command(args, timeout=timeout)
 
 
 def _safe_name(value):
@@ -28,16 +24,6 @@ def _write_text_file(path, content):
     text = (content or '').rstrip()
     path.write_text(f"{text}\n" if text else '', encoding='utf-8')
     return path
-
-
-def _kubectl_get_json(resource_type, resource_name):
-    result = _run_command(["kubectl", "get", resource_type, resource_name, "-o", "json"])
-    if result.returncode != 0 or not result.stdout.strip():
-        return None, result.stderr.strip() or f"{resource_type}/{resource_name} not found"
-    try:
-        return json.loads(result.stdout), None
-    except json.JSONDecodeError as exc:
-        return None, f"Invalid kubectl JSON for {resource_type}/{resource_name}: {exc}"
 
 
 def _parse_release_value(values_text, key, default):
@@ -57,7 +43,7 @@ def _parse_release_image(values_text):
 
 
 def _build_job_yaml(release_name):
-    values_result = _run_command(['helm', 'get', 'values', release_name, '-o', 'yaml'])
+    values_result = run_cli_command(['helm', 'get', 'values', release_name, '-o', 'yaml'])
     values_text = values_result.stdout if values_result.returncode == 0 else ''
 
     completions = _parse_release_value(values_text, 'completions', '100')
@@ -115,7 +101,7 @@ def _save_job_yaml_to_file(release_name, yaml_text):
 
 def _apply_job_yaml(release_name, yaml_text):
     output_path = _save_job_yaml_to_file(release_name, yaml_text)
-    apply_result = _run_command(['kubectl', 'apply', '-f', str(output_path)])
+    apply_result = run_cli_command(['kubectl', 'apply', '-f', str(output_path)])
     return output_path, apply_result
 
 
@@ -141,7 +127,7 @@ def _cleanup_legacy_statefulset_resources(release_name):
         ('pod', 'playwright-agent-0'),
         ('pdb', 'playwright-agent-pdb'),
     ]:
-        result = _run_command(['kubectl', 'delete', kind, name, '--ignore-not-found'])
+        result = run_cli_command(['kubectl', 'delete', kind, name, '--ignore-not-found'])
         actions.append({
             'kind': kind,
             'name': name,

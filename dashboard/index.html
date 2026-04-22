@@ -4,7 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>smartprobe</title>
-  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="icon" id="favicon" type="image/png" href="data:," />
+  <script>
+    (function() {
+      try {
+        var c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        var ctx = c.getContext('2d');
+        // Rounded rect background (no roundRect — use arcTo for compat)
+        var r = 6;
+        ctx.beginPath();
+        ctx.moveTo(r, 0); ctx.lineTo(32-r, 0); ctx.arcTo(32, 0, 32, r, r);
+        ctx.lineTo(32, 32-r); ctx.arcTo(32, 32, 32-r, 32, r);
+        ctx.lineTo(r, 32); ctx.arcTo(0, 32, 0, 32-r, r);
+        ctx.lineTo(0, r); ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fillStyle = '#0f172a'; ctx.fill();
+        // Radar rings
+        [[12,'#2563eb',0.35],[8,'#3b82f6',0.6],[4,'#60a5fa',0.85]].forEach(function(d){
+          ctx.strokeStyle=d[1]; ctx.globalAlpha=d[2]; ctx.lineWidth=1.5;
+          ctx.beginPath(); ctx.arc(16,16,d[0],0,Math.PI*2); ctx.stroke();
+        });
+        // Sweep line
+        ctx.globalAlpha=0.9; ctx.strokeStyle='#3b82f6'; ctx.lineWidth=1.8; ctx.lineCap='round';
+        ctx.beginPath(); ctx.moveTo(16,16); ctx.lineTo(27,7); ctx.stroke();
+        // Centre dot
+        ctx.globalAlpha=1; ctx.fillStyle='#93c5fd';
+        ctx.beginPath(); ctx.arc(16,16,2,0,Math.PI*2); ctx.fill();
+        document.getElementById('favicon').href = c.toDataURL('image/png');
+      } catch(e) {}
+    })();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -25,13 +55,44 @@
     <button onclick="switchView('dashboard')" class="text-xl font-bold tracking-tight hover:opacity-75 transition-opacity">smartprobe</button>
     <nav class="flex items-center gap-1 ml-2">
       <button id="nav-analytics" onclick="switchView('analytics')"
-        class="text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10">Analytics</button>
+        class="text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10">Metrics</button>
       <button id="nav-agents" onclick="switchView('agents')"
         class="text-sm px-3 py-1 rounded font-medium text-indigo-200 hover:bg-white/10">Agents</button>
     </nav>
   </div>
   <div class="flex items-center gap-3">
-    <span id="api-label" class="text-xs font-mono text-indigo-300"></span>
+    <!-- Endpoint selector -->
+    <div class="relative flex items-center gap-1" id="endpoint-widget">
+      <button id="endpoint-toggle" onclick="toggleEndpointEdit()"
+        class="flex items-center gap-1 text-indigo-300 hover:text-white transition-colors"
+        title="Change endpoint">
+        <!-- chevron-down icon -->
+        <svg id="endpoint-chevron" xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform duration-150" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+      <span id="api-label" class="text-xs font-mono text-indigo-300 cursor-pointer hover:text-white transition-colors" onclick="toggleEndpointEdit()"></span>
+      <!-- dropdown popover -->
+      <div id="endpoint-popover"
+        class="hidden absolute top-full left-0 mt-2 z-50 bg-indigo-950 border border-indigo-700 rounded-lg shadow-xl p-3 min-w-[320px]">
+        <p class="text-xs text-indigo-400 mb-2 font-medium">API endpoint base URL</p>
+        <div class="flex gap-2">
+          <input id="endpoint-input" type="text"
+            class="flex-1 bg-indigo-900 border border-indigo-600 rounded px-2 py-1 text-xs font-mono text-white placeholder-indigo-500 focus:outline-none focus:border-indigo-400"
+            placeholder="http://localhost:5002"
+            onkeydown="if(event.key==='Enter')applyEndpoint();if(event.key==='Escape')closeEndpointEdit()" />
+          <button onclick="applyEndpoint()"
+            class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1 rounded font-medium transition-colors">Apply</button>
+        </div>
+        <p class="text-xs text-indigo-500 mt-1">/api/simulation will be appended automatically</p>
+      </div>
+    </div>
+    <!-- Active test target URL (shown when a test is running) -->
+    <span id="target-url-badge" class="hidden items-center gap-1.5 bg-indigo-800/60 border border-indigo-600/50 rounded px-2 py-0.5">
+      <span class="text-xs text-indigo-400 font-medium uppercase tracking-wide">target</span>
+      <a id="target-url-text" href="#" target="_blank" rel="noopener"
+        class="text-xs font-mono text-cyan-300 hover:text-white truncate max-w-[220px] transition-colors"></a>
+    </span>
     <span id="status-dot" class="inline-block w-2 h-2 rounded-full bg-slate-400"></span>
     <span id="status-text" class="text-xs text-indigo-200">connecting…</span>
   </div>
@@ -40,23 +101,28 @@
 <div id="view-dashboard" class="max-w-7xl mx-auto px-4 py-6 space-y-4">
 
   <!-- Stats Bar -->
-  <div class="bg-white border border-slate-300 rounded-xl shadow-sm px-5 py-3">
+  <div class="bg-white border border-slate-300 rounded-xl shadow-sm px-5 py-3 space-y-2">
     <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
+      <!-- Test config -->
+      <span><span class="text-slate-400 text-xs">simulation_target</span> <span id="s-total" class="font-bold text-slate-700 ml-1">—</span></span>
+      <span class="text-slate-200">|</span>
+      <span><span class="text-slate-400 text-xs">simulation_parallelism</span> <span id="s-parallelism" class="font-bold text-violet-600 ml-1">—</span></span>
+      <span class="text-slate-200">|</span>
       <!-- Pod counts (from Prometheus gauges) -->
-      <span><span class="text-slate-400 text-xs">ACTIVE</span> <span id="s-pods" class="font-bold text-indigo-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">agent_pods_active</span> <span id="s-pods" class="font-bold text-indigo-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">SUCCESS</span> <span id="s-success" class="font-bold text-indigo-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">agent_pods_succeeded</span> <span id="s-success" class="font-bold text-emerald-400 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">FAILED</span> <span id="s-errors" class="font-bold text-red-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">agent_pods_failed</span> <span id="s-errors" class="font-bold text-red-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">PENDING</span> <span id="s-pending" class="font-bold text-amber-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">agent_pods_pending</span> <span id="s-pending" class="font-bold text-amber-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
       <!-- Throughput + ETA (from perf calcs) -->
-      <span><span class="text-slate-400 text-xs">THROUGHPUT</span> <span id="p-rate" class="font-bold text-orange-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">simulation_throughput</span> <span id="p-rate" class="font-bold text-orange-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">ETA</span> <span id="p-eta" class="font-bold text-sky-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">simulation_eta</span> <span id="p-eta" class="font-bold text-sky-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">AVG</span> <span id="p-avg" class="font-bold text-slate-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">agent_test_duration_avg</span> <span id="p-avg" class="font-bold text-slate-600 ml-1">—</span></span>
       <!-- Kueue extras injected by JS -->
       <span id="kueue-section" class="hidden contents">
         <span class="text-slate-200">|</span>
@@ -66,6 +132,15 @@
         <span class="text-slate-200">|</span>
         <span><span class="text-slate-400 text-xs">DRAIN</span> <span id="s-drain" class="font-bold text-fuchsia-600 ml-1">—</span></span>
       </span>
+    </div>
+    <!-- Agent progress bar -->
+    <div id="agent-bar-wrap" class="hidden">
+      <div class="flex rounded-full overflow-hidden h-1.5 bg-slate-100">
+        <div id="bar-success" class="bg-green-400 transition-all duration-500" style="width:0%"></div>
+        <div id="bar-active"  class="bg-sky-400   transition-all duration-500" style="width:0%"></div>
+        <div id="bar-pending" class="bg-amber-400 transition-all duration-500" style="width:0%"></div>
+        <div id="bar-failed"  class="bg-red-400   transition-all duration-500" style="width:0%"></div>
+      </div>
     </div>
   </div>
 
@@ -132,29 +207,46 @@
 <!-- Analytics View -->
 <div id="view-analytics" class="hidden max-w-7xl mx-auto px-4 py-6 space-y-6">
   <div class="flex items-center justify-between">
-    <span class="text-xs text-slate-400 font-mono">Source: <span id="metrics-source" class="text-slate-600"></span></span>
     <span id="metrics-updated" class="text-xs text-slate-400"></span>
   </div>
 
-  <!-- Agent Pod Gauges -->
+  <!-- Event Totals -->
   <div>
-    <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Agent Pods</h2>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Event Totals <span class="normal-case text-slate-300 font-normal">(lifetime, resets on service restart)</span></h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-3">
       <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
         <div id="m-pods-active" class="text-3xl font-bold text-indigo-500">—</div>
-        <div class="text-xs text-slate-500 mt-1">Active</div>
+        <div class="text-xs text-slate-500 mt-1">transfer_completed</div>
       </div>
       <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
-        <div id="m-pods-succeeded" class="text-3xl font-bold text-indigo-500">—</div>
-        <div class="text-xs text-slate-500 mt-1">Succeeded</div>
+        <div id="m-pods-succeeded" class="text-3xl font-bold text-emerald-500">—</div>
+        <div class="text-xs text-slate-500 mt-1">asset_created</div>
       </div>
       <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
         <div id="m-pods-failed" class="text-3xl font-bold text-red-500">—</div>
-        <div class="text-xs text-slate-500 mt-1">Failed</div>
+        <div class="text-xs text-slate-500 mt-1">conflict_detected</div>
       </div>
       <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
         <div id="m-pods-pending" class="text-3xl font-bold text-amber-500">—</div>
-        <div class="text-xs text-slate-500 mt-1">Pending</div>
+        <div class="text-xs text-slate-500 mt-1">agent_pods_started</div>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-live-active" class="text-3xl font-bold text-indigo-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">agent_pods_active</div>
+      </div>
+      <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-live-succeeded" class="text-3xl font-bold text-emerald-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">agent_pods_succeeded</div>
+      </div>
+      <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-live-failed" class="text-3xl font-bold text-red-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">agent_pods_failed</div>
+      </div>
+      <div class="bg-white border border-slate-300 rounded-xl shadow-sm p-5 text-center">
+        <div id="m-live-pending" class="text-3xl font-bold text-amber-600">—</div>
+        <div class="text-xs text-slate-500 mt-1">agent_pods_pending</div>
       </div>
     </div>
   </div>
@@ -295,13 +387,27 @@
 </div>
 
 <!-- Agents view -->
-<div id="view-agents" class="hidden max-w-7xl mx-auto px-4 py-6 space-y-4">
-  <div class="flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Agent Activity</h2>
-    <span id="agents-count" class="text-xs text-slate-400"></span>
+<div id="view-agents" class="hidden max-w-7xl mx-auto px-4 py-6 space-y-6">
+  <!-- Agent Activity -->
+  <div class="space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Agent Activity</h2>
+      <span id="agents-count" class="text-xs text-slate-400"></span>
+    </div>
+    <div id="agent-narrative-grid" class="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div class="text-slate-400 text-sm col-span-full py-6 text-center">Waiting for agents…</div>
+    </div>
   </div>
-  <div id="agent-narrative-grid" class="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-    <div class="text-slate-400 text-sm col-span-full py-6 text-center">Waiting for agents…</div>
+
+  <!-- Agent Profiles -->
+  <div class="space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Agent Profiles</h2>
+      <span id="profiles-count" class="text-xs text-slate-400"></span>
+    </div>
+    <div id="agent-profiles-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-3">
+      <div class="text-slate-400 text-sm col-span-full py-6 text-center">Waiting for agents…</div>
+    </div>
   </div>
 </div>
 
@@ -383,8 +489,49 @@
 <script>
 // ─── Config ────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search)
-const API_BASE = (params.get('api') || 'http://localhost:5002').replace(/\/$/, '') + '/api/simulation'
+// Use a relative path by default so the dashboard works correctly regardless of
+// which port or proxy it is served from.  An explicit ?api= override is still
+// honoured for remote/embedded usage.
+const _defaultBase = params.get('api')
+  ? params.get('api').replace(/\/$/, '')
+  : window.location.origin
+let API_BASE = _defaultBase + '/api/simulation'
 document.getElementById('api-label').textContent = API_BASE
+document.getElementById('endpoint-input').value = _defaultBase
+
+// ─── Endpoint switcher ───────────────────────────────────────────────────────
+function toggleEndpointEdit() {
+  const pop = document.getElementById('endpoint-popover')
+  const chevron = document.getElementById('endpoint-chevron')
+  const isOpen = !pop.classList.contains('hidden')
+  if (isOpen) {
+    closeEndpointEdit()
+  } else {
+    pop.classList.remove('hidden')
+    chevron.style.transform = 'rotate(180deg)'
+    const inp = document.getElementById('endpoint-input')
+    inp.value = API_BASE.replace(/\/api\/simulation$/, '')
+    setTimeout(() => { inp.focus(); inp.select() }, 50)
+  }
+}
+function closeEndpointEdit() {
+  document.getElementById('endpoint-popover').classList.add('hidden')
+  document.getElementById('endpoint-chevron').style.transform = ''
+}
+function applyEndpoint() {
+  const raw = document.getElementById('endpoint-input').value.trim().replace(/\/$/, '')
+  if (!raw) return
+  API_BASE = raw + '/api/simulation'
+  METRICS_BASE = raw
+  document.getElementById('api-label').textContent = API_BASE
+  closeEndpointEdit()
+  fetchStats()
+}
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('endpoint-widget').contains(e.target)) {
+    closeEndpointEdit()
+  }
+})
 
 // ─── State ──────────────────────────────────────────────────────────────────
 let agentRoles = {}   // pod → {role, username}
@@ -397,7 +544,8 @@ let currentTab = 'all'
 let expanded = true
 let pollingActive = true
 
-const POD_TYPES = new Set(['started','completed','pending','failed','registered','logged_in','agent_done'])
+const POD_TYPES = new Set(['started','completed','pending','failed','registered','logged_in','agent_done',
+  'probe_start','probe_get','probe_done','probe_error'])
 const TX_TYPES  = new Set(['asset_created','transfer_started','transfer_completed','transfer_failed','conflict_detected','consistency_check'])
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -419,6 +567,7 @@ function eventColor(type) {
     transfer_failed:'text-red-600', registered:'text-indigo-500', logged_in:'text-slate-500',
     transfer_started:'text-violet-600', asset_created:'text-indigo-400',
     conflict_detected:'text-amber-600', consistency_check:'text-cyan-600',
+    probe_start:'text-sky-500', probe_get:'text-sky-500', probe_done:'text-emerald-500', probe_error:'text-red-500',
   }
   return map[type] || 'text-slate-400'
 }
@@ -438,6 +587,10 @@ function formatLabel(e) {
     case 'transfer_failed':     return `${e.pod} transfer failed${e.details ? ` — ${e.details}` : ''}`
     case 'conflict_detected':   return `${e.pod} CONFLICT${e.details ? ` — ${e.details}` : ''}`
     case 'consistency_check':   return `${e.pod} verified${e.details ? ` — ${e.details}` : ''}`
+    case 'probe_start':         return `${e.pod} probe started${e.details ? ` — ${e.details}` : ''}`
+    case 'probe_get':           return `${e.pod} GET${e.details ? ` ${e.details}` : ''}`
+    case 'probe_error':         return `${e.pod} probe FAIL${e.details ? ` — ${e.details}` : ''}`
+    case 'probe_done':          return `${e.pod} probe done${e.details ? ` — ${e.details}` : ''}`
     default:                    return `${e.pod} ${e.type}${e.details ? ` (${e.details})` : ''}`
   }
 }
@@ -490,6 +643,10 @@ function agentNarrative(role, type, details) {
     case 'conflict_detected':   return 'Lost a race condition — another buyer was faster'
     case 'consistency_check':   return 'Checking data consistency'
     case 'agent_done':          return details ? `Done — ${details}` : 'Completed all tasks'
+    case 'probe_start':         return details ? `Probing — ${details}` : 'Starting probe'
+    case 'probe_get':           return details ? `GET ${details}` : 'HTTP check'
+    case 'probe_done':          return details ? `Probe done — ${details}` : 'Probe complete'
+    case 'probe_error':         return details ? `Probe error — ${details}` : 'Probe failed'
     case 'started':             return 'Starting up…'
     case 'pending':             return 'Pending'
     case 'completed':           return details ? `Completed — ${details}` : 'Completed'
@@ -520,36 +677,34 @@ function agentStatusIcon(type) {
 }
 
 function renderAgentNarratives() {
-  // Build per-pod latest event map
-  const latest = {}
-  for (const e of activityLog) {
-    if (!latest[e.pod] || e.time > latest[e.pod].time) latest[e.pod] = e
-  }
-
-  const pods = Object.keys(latest)
+  // Use agentStates (never trimmed, all pods) rather than the capped activityLog
+  const pods = Object.keys(agentStates)
   if (pods.length === 0) {
     document.getElementById('agent-narrative-grid').innerHTML =
       '<div class="text-slate-400 text-sm col-span-full py-6 text-center">No agent activity yet…</div>'
     setText('agents-count', '')
+    renderAgentProfiles()
     return
   }
 
   // Sort: active first, then by pod name
-  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed','probe_done','probe_error'])
   pods.sort((a, b) => {
-    const aDone = DONE_TYPES.has(latest[a].type), bDone = DONE_TYPES.has(latest[b].type)
+    const aDone = DONE_TYPES.has(agentStates[a].type), bDone = DONE_TYPES.has(agentStates[b].type)
     if (aDone !== bDone) return aDone ? 1 : -1
     return a.localeCompare(b)
   })
 
-  const active = pods.filter(p => !DONE_TYPES.has(latest[p].type)).length
-  const done   = pods.filter(p =>  DONE_TYPES.has(latest[p].type)).length
+  const active = pods.filter(p => !DONE_TYPES.has(agentStates[p].type)).length
+  const done   = pods.filter(p =>  DONE_TYPES.has(agentStates[p].type)).length
   setText('agents-count', `${active} active · ${done} done · ${pods.length} total`)
 
   document.getElementById('agent-narrative-grid').innerHTML = pods.map(pod => {
-    const e    = latest[pod]
+    const e    = agentStates[pod]
     const info = agentRoles[pod] || {}
-    const role = info.role || 'unknown'
+    // Role from coordinator, or extracted from agent_done details (e.g. "role:buyer · 8s")
+    const detailRole = (e.details || '').match(/role:(\w+)/)?.[1] || null
+    const role = info.role || detailRole || 'unknown'
     const roleBadge = ROLE_BADGE[role] || ROLE_BADGE.observer
     const narrative = agentNarrative(role, e.type, e.details)
     const color     = agentNarrativeColor(e.type)
@@ -557,7 +712,7 @@ function renderAgentNarratives() {
     const isDone    = DONE_TYPES.has(e.type)
     const cardBg    = isDone ? 'from-slate-50/90 to-slate-100/80 opacity-70' : 'from-white/95 to-indigo-50/80'
     return `
-    <div class="border border-indigo-300/30 rounded-xl bg-gradient-to-b ${cardBg} p-4 flex flex-col gap-2 shadow-sm">
+    <div onclick="viewAgentDetail('${escHtml(pod)}')" class="cursor-pointer border border-indigo-300/30 rounded-xl bg-gradient-to-b ${cardBg} p-4 flex flex-col gap-2 shadow-sm hover:border-indigo-400/60 hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between gap-2">
         <span class="font-bold text-indigo-700 text-sm truncate" title="${escHtml(pod)}">🤖 ${escHtml(pod)}</span>
         <span class="px-2 py-0.5 rounded-full text-xs font-semibold capitalize shrink-0 ${escHtml(roleBadge)}">${escHtml(role)}</span>
@@ -569,13 +724,99 @@ function renderAgentNarratives() {
       <div class="text-xs text-slate-400 mt-auto pt-1">${escHtml(e.timestamp || '')}</div>
     </div>`
   }).join('')
+
+  renderAgentProfiles()
+}
+
+const ROLE_META = {
+  seller:   { icon: '🏷️', label: 'Seller',   desc: 'Creates and lists assets for sale' },
+  buyer:    { icon: '🛒', label: 'Buyer',    desc: 'Browses and claims listed assets' },
+  observer: { icon: '👁️',  label: 'Observer', desc: 'Monitors activity without transacting' },
+}
+
+function renderAgentProfiles() {
+  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed','probe_done','probe_error'])
+  const pods = Object.keys(agentStates)
+
+  // Group pods by role
+  const groups = { seller: [], buyer: [], observer: [], unknown: [] }
+  for (const pod of pods) {
+    const e = agentStates[pod]
+    const info = agentRoles[pod] || {}
+    const detailRole = (e.details || '').match(/role:(\w+)/)?.[1] || null
+    const role = info.role || detailRole || 'unknown'
+    ;(groups[role] || groups.unknown).push(pod)
+  }
+
+  const roles = ['seller', 'buyer', 'observer']
+  const hasAny = roles.some(r => groups[r].length > 0) || groups.unknown.length > 0
+  const totalProfiled = roles.reduce((n, r) => n + groups[r].length, 0)
+
+  if (!hasAny || pods.length === 0) {
+    document.getElementById('agent-profiles-grid').innerHTML =
+      '<div class="text-slate-400 text-sm col-span-full py-6 text-center">No agent profiles yet…</div>'
+    setText('profiles-count', '')
+    return
+  }
+
+  setText('profiles-count', `${totalProfiled} profiled`)
+
+  const cards = roles.map(role => {
+    const meta = ROLE_META[role]
+    const members = groups[role]
+    const active = members.filter(p => !DONE_TYPES.has(agentStates[p].type))
+    const done   = members.filter(p =>  DONE_TYPES.has(agentStates[p].type))
+    const badge  = ROLE_BADGE[role]
+
+    const memberRows = members.length === 0
+      ? '<div class="text-slate-400 text-xs italic">No agents assigned</div>'
+      : members.slice().sort((a, b) => {
+          const aDone = DONE_TYPES.has(agentStates[a].type)
+          const bDone = DONE_TYPES.has(agentStates[b].type)
+          if (aDone !== bDone) return aDone ? 1 : -1
+          return a.localeCompare(b)
+        }).map(pod => {
+          const e = agentStates[pod]
+          const icon = agentStatusIcon(e.type)
+          const color = agentNarrativeColor(e.type)
+          const isDone = DONE_TYPES.has(e.type)
+          return `<div onclick="viewAgentDetail('${escHtml(pod)}')" class="cursor-pointer flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-slate-100/80 transition-colors ${isDone ? 'opacity-50' : ''}">
+            <span class="text-sm shrink-0">${icon}</span>
+            <span class="font-mono text-xs text-slate-700 truncate flex-1" title="${escHtml(pod)}">${escHtml(pod)}</span>
+            <span class="text-xs ${color} shrink-0">${escHtml(agentNarrative(role, e.type, null).split('—')[0].trim())}</span>
+          </div>`
+        }).join('')
+
+    return `<div class="rounded-xl border border-slate-200/80 bg-white/95 shadow-sm flex flex-col">
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
+        <span class="text-2xl">${meta.icon}</span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="font-semibold text-slate-800 text-sm">${meta.label}s</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${badge}">${members.length}</span>
+          </div>
+          <div class="text-xs text-slate-400 mt-0.5">${meta.desc}</div>
+        </div>
+        <div class="text-right text-xs text-slate-400 shrink-0">
+          <div><span class="font-semibold text-sky-600">${active.length}</span> active</div>
+          <div><span class="font-semibold text-slate-500">${done.length}</span> done</div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto max-h-48 p-2 space-y-0.5">
+        ${memberRows}
+      </div>
+    </div>`
+  }).join('')
+
+  document.getElementById('agent-profiles-grid').innerHTML = cards
 }
 
 async function fetchAgentRoles() {
-  // coordinator runs on 5003; derive its base from API_BASE
-  const coordBase = API_BASE.replace(/\/api\/simulation$/, '').replace(/:5002/, ':5003')
+  // Always use same-origin proxy to avoid cross-origin issues in local dev.
+  // simulation_service proxies /api/simulation/coordinator/* → coordinator:5003.
+  // Behind nginx, /api/coordinator/ is also available but this path works everywhere.
   try {
-    const res = await fetch(`${coordBase}/api/coordinator/agents`)
+    const res = await fetch(`${API_BASE}/coordinator/agents`)
     if (!res.ok) return
     const data = await res.json()
     agentRoles = {}
@@ -594,10 +835,74 @@ function updateStats(data) {
   // When k8s shows nothing running, fall back to cumulative activity totals
   // so the stats bar stays meaningful after pods have been cleaned up.
   const anyLive = liveActive + liveSucceeded + liveFailed + livePending > 0
-  setText('s-pods',    anyLive ? liveActive    : activityTotals.started - activityTotals.completed - activityTotals.failed || 0)
-  setText('s-success', anyLive ? liveSucceeded : activityTotals.completed || liveSucceeded)
-  setText('s-errors',  anyLive ? liveFailed    : activityTotals.failed    || liveFailed)
-  setText('s-pending', anyLive ? livePending   : 0)
+  // Fallback counters derived from agent event totals (used when k8s stats unavailable)
+  const evtDone    = (activityTotals.agent_done   ?? 0) + (activityTotals.probe_done  ?? 0)
+  const evtFailed  = (activityTotals.probe_error  ?? 0)
+  const evtStarted = (activityTotals.registered   ?? 0) + (activityTotals.probe_start ?? 0)
+  const evtActive  = Math.max(evtStarted - evtDone - evtFailed, 0)
+  const dispActive  = anyLive ? liveActive    : evtActive
+  const dispSuccess = anyLive ? liveSucceeded : evtDone   || liveSucceeded
+  const dispFailed  = anyLive ? liveFailed    : evtFailed || liveFailed
+  const dispPending = anyLive ? livePending   : 0
+  const dispTotal   = dispActive + dispSuccess + dispFailed + dispPending
+
+  // simulation_target: job spec completions (what was requested), falls back to pod count sum
+  const jobsMap = data.jobs || {}
+  const jobNames = Object.keys(jobsMap)
+  const specTotal = jobNames.reduce((s, k) => s + (jobsMap[k].completions || 0), 0)
+  const specParallelism = jobNames.reduce((s, k) => s + (jobsMap[k].parallelism || 0), 0)
+
+  // Active test config from Prometheus Info metric — reliable fallback when k8s job spec returns null
+  const activeTest     = (data.prometheus || {}).active_test || {}
+  const infoTotal      = parseInt(activeTest.completions  || '0', 10) || 0
+  const infoParallel   = parseInt(activeTest.parallelism  || '0', 10) || 0
+
+  setText('s-total',       specTotal       || infoTotal     || data.total || dispTotal || '—')
+  setText('s-parallelism', specParallelism || infoParallel  || '—')
+  const targetUrl  = activeTest.target_url || ''
+  const badge      = document.getElementById('target-url-badge')
+  const urlEl      = document.getElementById('target-url-text')
+  if (targetUrl) {
+    badge.classList.remove('hidden')
+    badge.classList.add('flex')
+    urlEl.textContent = targetUrl.replace(/^https?:\/\//, '')
+    urlEl.href        = targetUrl
+  } else {
+    badge.classList.add('hidden')
+    badge.classList.remove('flex')
+  }
+
+  setText('s-pods',    dispActive)
+  setText('s-success', dispSuccess)
+  setText('s-errors',  dispFailed)
+  setText('s-pending', dispPending)
+
+  // Success shade: emerald, brighter as rate increases
+  const successEl = document.getElementById('s-success')
+  if (successEl && dispTotal > 0) {
+    const rate = dispSuccess / dispTotal
+    const shade = rate >= 0.95 ? 'text-emerald-300'
+                : rate >= 0.85 ? 'text-emerald-400'
+                : rate >= 0.70 ? 'text-emerald-500'
+                : rate >= 0.50 ? 'text-emerald-600'
+                : rate >= 0.25 ? 'text-emerald-700'
+                :                'text-emerald-800'
+    successEl.className = successEl.className.replace(/text-emerald-\d+/, shade)
+  }
+
+  // Agent breakdown bar — denominator is the spec total so bar fills against the full 100-agent target
+  const barTotal = specTotal || data.total || dispTotal
+  const barWrap = document.getElementById('agent-bar-wrap')
+  if (barTotal > 0) {
+    barWrap.classList.remove('hidden')
+    const pct = v => ((v / barTotal) * 100).toFixed(1) + '%'
+    document.getElementById('bar-success').style.width = pct(dispSuccess)
+    document.getElementById('bar-active').style.width  = pct(dispActive)
+    document.getElementById('bar-pending').style.width = pct(dispPending)
+    document.getElementById('bar-failed').style.width  = pct(dispFailed)
+  } else {
+    barWrap.classList.add('hidden')
+  }
 
   const kueue = data.kueue
   if (kueue?.active) {
@@ -687,7 +992,7 @@ function setTab(tab) {
   else if (tab === 'pods')    active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-pods'
   else if (tab === 'agents')  active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-agents'
   else                        active.className = 'text-sm font-semibold px-2 py-0.5 rounded transition-colors tab-active-tx'
-  if (tab === 'agents') renderAgentNarrativesCompact()
+  if (tab === 'agents') { fetchAgentStates().then(() => { fetchAgentRoles().then(renderAgentNarrativesCompact) }) }
   else renderLog()
 }
 
@@ -698,7 +1003,7 @@ function renderAgentNarrativesCompact() {
     container.innerHTML = '<div class="text-slate-400 py-2">No agent activity yet…</div>'
     return
   }
-  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+  const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed','probe_done','probe_error'])
   pods.sort((a, b) => {
     const aDone = DONE_TYPES.has(agentStates[a].type), bDone = DONE_TYPES.has(agentStates[b].type)
     if (aDone !== bDone) return aDone ? 1 : -1
@@ -711,7 +1016,10 @@ function renderAgentNarrativesCompact() {
   container.innerHTML = pods.map(pod => {
     const e = agentStates[pod]
     const icon = agentStatusIcon(e.type)
-    const narrative = agentNarrative('unknown', e.type, e.details)
+    const info = agentRoles[pod] || {}
+    const detailRole = (e.details || '').match(/role:(\w+)/)?.[1] || null
+    const role = info.role || detailRole || 'unknown'
+    const narrative = agentNarrative(role, e.type, e.details)
     const color = agentNarrativeColor(e.type)
     const logsBtn = (e.type === 'completed' || e.type === 'agent_done')
       ? ` <button onclick="viewPodLogs('${escHtml(pod)}')" class="ml-1 text-slate-400 hover:text-sky-600 underline">logs</button>`
@@ -804,9 +1112,8 @@ function renderLog() {
     }
     summary = `${completed} completed · ${started} started · ${conflicts} conflicts · ${failed} failed`
   } else { // agents
-    const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed'])
+    const DONE_TYPES = new Set(['agent_done','completed','failed','transfer_completed','transfer_failed','probe_done','probe_error'])
     const agentPods = Object.keys(agentStates)
-    const done = agentPods.filter(p => DONE_TYPES.has(agentStates[p].type)).length
     const active = agentPods.length - done
     summary = `${agentPods.length} agents · ${active} active · ${done} finished`
   }
@@ -820,7 +1127,7 @@ function renderLog() {
   const container = document.getElementById('log-container')
   if (display.length === 0) {
     container.innerHTML = `<div class="text-slate-400 py-2">${
-      currentTab === 'transactions' ? 'No asset transactions — basic mode.' : 'No activity yet — waiting for agents…'
+      currentTab === 'transactions' ? 'No asset transactions — run a transactional test.' : 'No activity yet — waiting for agents…'
     }</div>`
     return
   }
@@ -988,6 +1295,7 @@ async function viewAgentDetail(pod) {
       transfer_started: '🔄', transfer_completed: '💸', transfer_failed: '❌',
       conflict_detected: '⚠️', consistency_check: '🔍', agent_done: '✅',
       completed: '✅', failed: '❌',
+      probe_start: '🚀', probe_get: '🌐', probe_done: '✅', probe_error: '❌', action: '▸',
     }
 
     if (actions.length > 0) {
@@ -1099,15 +1407,14 @@ async function fetchAgentStates() {
 
 fetchStats()
 fetchActivity()
-fetchAgentRoles()
-fetchAgentStates()
+fetchAgentStates().then(() => fetchAgentRoles())
 setInterval(() => {
   fetchStats()
   fetchActivity()
   fetchAgentStates().then(() => {
-    if (currentTab === 'agents') renderAgentNarrativesCompact()
+    if (currentTab === 'agents') fetchAgentRoles().then(renderAgentNarrativesCompact)
+    if (currentView === 'agents') fetchAgentRoles().then(renderAgentNarratives)
   })
-  if (currentView === 'agents') { fetchAgentRoles(); renderAgentNarratives() }
 }, 2000)
 
 // Allow ?tab=transactions etc on load
@@ -1115,7 +1422,7 @@ const initTab = params.get('tab')
 if (initTab === 'pods' || initTab === 'transactions') setTab(initTab)
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
-const METRICS_BASE = API_BASE.replace(/\/api\/simulation$/, '')
+let METRICS_BASE = API_BASE.replace(/\/api\/simulation$/, '')
 
 function parsePrometheusText(text) {
   const metrics = {}
@@ -1153,12 +1460,17 @@ function uniqueLabels(metrics, name, key) {
 function fmtNum(n) { return Number.isFinite(n) ? Math.round(n).toLocaleString() : '—' }
 function fmtMs(s)  { return Number.isFinite(s) && s > 0 ? `${(s * 1000).toFixed(0)}ms` : '—' }
 
-function renderAnalytics(metrics) {
-  // Pod gauges
-  setText('m-pods-active',    fmtNum(getVal(metrics, 'agent_pods_active')))
-  setText('m-pods-succeeded', fmtNum(getVal(metrics, 'agent_pods_succeeded')))
-  setText('m-pods-failed',    fmtNum(getVal(metrics, 'agent_pods_failed')))
-  setText('m-pods-pending',   fmtNum(getVal(metrics, 'agent_pods_pending')))
+function renderAnalytics(metrics, totals = {}) {
+  // Row 1: lifetime event totals (transfer-stacker + K8s)
+  setText('m-pods-active',    fmtNum((totals.transfer_completed ?? 0) + (totals.completed ?? 0)))
+  setText('m-pods-succeeded', fmtNum(totals.asset_created ?? 0))
+  setText('m-pods-failed',    fmtNum(totals.conflict_detected ?? 0))
+  setText('m-pods-pending',   fmtNum(totals.started ?? 0))
+  // Row 2: live Prometheus gauges
+  setText('m-live-active',    fmtNum(getVal(metrics, 'agent_pods_active')))
+  setText('m-live-succeeded', fmtNum(getVal(metrics, 'agent_pods_succeeded')))
+  setText('m-live-failed',    fmtNum(getVal(metrics, 'agent_pods_failed')))
+  setText('m-live-pending',   fmtNum(getVal(metrics, 'agent_pods_pending')))
 
   // Kueue
   setText('m-kueue-active',   getVal(metrics, 'kueue_active') > 0 ? 'Active' : 'Inactive')
@@ -1280,16 +1592,19 @@ function switchView(view) {
   document.getElementById('nav-analytics').className = view === 'analytics'  ? active : inactive
   document.getElementById('nav-agents').className    = view === 'agents'     ? active : inactive
   if (view === 'analytics') fetchMetrics()
-  if (view === 'agents') { fetchAgentRoles().then(renderAgentNarratives) }
+  if (view === 'agents') { fetchAgentStates().then(() => fetchAgentRoles()).then(renderAgentNarratives) }
 }
 
 async function fetchMetrics() {
   const url = `${METRICS_BASE}/metrics`
-  setText('metrics-source', url)
   try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    renderAnalytics(parsePrometheusText(await res.text()))
+    const [metricsRes, activityRes] = await Promise.all([
+      fetch(url),
+      fetch(`${API_BASE}/activity?limit=1`).catch(() => null),
+    ])
+    if (!metricsRes.ok) throw new Error(`HTTP ${metricsRes.status}`)
+    const totals = activityRes?.ok ? (await activityRes.json()).totals ?? {} : {}
+    renderAnalytics(parsePrometheusText(await metricsRes.text()), totals)
   } catch (e) {
     setText('metrics-updated', `Error: ${e.message}`)
   }

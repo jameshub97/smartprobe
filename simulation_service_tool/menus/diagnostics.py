@@ -15,15 +15,7 @@ from simulation_service_tool.services.docker_compose import (
     EXPECTED_SERVICES,
 )
 from simulation_service_tool.cli.commands import start_service
-
-
-def _prompt_continue():
-    """Simple continue prompt."""
-    questionary.select(
-        "Next:",
-        choices=[questionary.Choice(title="Continue", value="continue")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_continue
 
 
 def quick_diagnostics() -> dict:
@@ -121,7 +113,7 @@ def _auto_fix(issues, diag):
 
     # Fix drift issues
     if issues:
-        print("\n[INFO] Fixing drift issues...")
+        print("\n[INFO] Fixing residual data...")
         _, results = remediate_all(diag['drift_findings'])
         for _, success, detail in results:
             marker = "[OK]" if success else "[WARN]"

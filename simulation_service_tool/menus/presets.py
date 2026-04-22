@@ -6,14 +6,7 @@ import questionary
 from simulation_service_tool.ui.styles import custom_style
 from simulation_service_tool.ui.utils import clear_screen
 from simulation_service_tool.services.api_client import check_service, call_service
-
-
-def _prompt_go_back():
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 def get_preset_config(preset):

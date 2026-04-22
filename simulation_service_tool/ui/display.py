@@ -113,7 +113,7 @@ def render_drift_banner(banner_text, findings=None):
 
     console.print(Panel(
         Group(*parts),
-        title="Baseline Drift",
+        title="Residual Data",
         border_style="yellow",
         box=box.ROUNDED,
         padding=(1, 2),

@@ -14,17 +14,7 @@ except ImportError:  # pragma: no cover - optional interactive dependency
 
 from simulation_service_tool.ui.styles import custom_style
 from simulation_service_tool.ui.utils import clear_screen
-
-
-def _prompt_go_back():
-    if questionary is None:
-        input("\nPress Enter to go back...")
-        return
-    questionary.select(
-        "Next step:",
-        choices=[questionary.Choice(title="Go back", value="back")],
-        style=custom_style,
-    ).ask()
+from simulation_service_tool.cli.prompts import _prompt_go_back
 
 
 DEV_PORTS = {

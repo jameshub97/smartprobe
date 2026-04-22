@@ -1,11 +1,15 @@
 """
-Coordinated Playwright Agent — End-to-End Distributed Interaction
+Playwright Agent — supports two modes:
 
-Agents register with a coordinator, get assigned roles (seller/buyer/observer),
-and interact with each other through the asset management platform:
-  - Sellers: register, login, create assets, list them in the shared pool
-  - Buyers:  register, login, browse pool, claim & transfer assets (race conditions)
-  - Observers: register, login, verify data consistency across the system
+  basic        — simple HTTP probe that verifies the website loads (HTTP 200,
+                 page contains expected content).  No auth, no coordinator.
+
+  transactional — coordinated end-to-end simulation: agents register, get
+                  assigned roles (seller/buyer/observer), and interact with each
+                  other through the asset management platform:
+                    - Sellers:   create and list assets in the shared pool
+                    - Buyers:    claim & transfer assets (exercises race conditions)
+                    - Observers: verify data consistency across the system
 
 Each agent reports real-time actions to the simulation activity feed.
 """
@@ -25,13 +29,21 @@ COORD_API = os.getenv("COORD_API", "http://host.docker.internal:5003/api/coordin
 PERSONA = os.getenv("AGENT_PERSONA", "browser")
 THINK_TIME = float(os.getenv("THINK_TIME", "2"))
 POD_NAME = os.getenv("HOSTNAME", socket.gethostname())
+PROBE_MODE = os.getenv("PROBE_MODE", "transactional")
+AGENT_ROUNDS = int(os.getenv("AGENT_ROUNDS", "3"))
+ROUND_SLEEP = float(os.getenv("ROUND_SLEEP", "30"))
 
 # Backend API base (same host as TARGET_URL for the C# backend)
 API_BASE = TARGET_URL.rstrip("/")
 
+# Transfer Stacker item catalog
+TS_ITEMS = ["Widget A", "Widget B", "Gasket", "Steel Rod", "Relay", "Piston", "Valve"]
+
 print(f"[agent] starting: {PERSONA} ({POD_NAME})")
+print(f"[agent] mode: {PROBE_MODE}")
 print(f"[agent] target: {TARGET_URL}, sim: {SIM_API}")
-print(f"[agent] coordinator: {COORD_API}")
+if PROBE_MODE != "basic":
+    print(f"[agent] coordinator: {COORD_API}")
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -102,7 +114,7 @@ def coord_post(path, body):
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
 def register_and_login():
-    """Create a unique agent account and login to get JWT + user_id."""
+    """Create a unique agent account and login to get JWT + user_id + password."""
     agent_id = f"agent-{POD_NAME[-8:]}-{random.randint(1000, 9999)}"
     username = agent_id
     email = f"{agent_id}@sim.local"
@@ -132,13 +144,25 @@ def register_and_login():
             user_id = str(data.get("userId"))
             print(f"[agent] logged in: {username} (uid={user_id})")
             report_action("logged_in", username)
-            return token, user_id, username
+            return token, user_id, username, password
         else:
             print(f"[agent] login {r.status_code}: {r.text[:120]}")
     except Exception as e:
         print(f"[agent] login failed: {e}")
 
-    return None, None, username
+    return None, None, username, password
+
+
+def relogin(username, password):
+    """Get a fresh token using existing credentials."""
+    try:
+        r = api_post("/api/auth/login", {"username": username, "password": password})
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("token"), str(data.get("userId"))
+    except Exception as e:
+        print(f"[agent] re-login failed: {e}")
+    return None, None
 
 
 # ─── Coordinator Registration ────────────────────────────────────────────────
@@ -160,53 +184,45 @@ def register_with_coordinator(user_id, username, token):
         return "buyer"
 
 
-# ─── Asset Name Generator ───────────────────────────────────────────────────
-ASSET_NAMES = [
-    "Solar Panel Array", "Wind Turbine Unit", "Battery Storage Module",
-    "Server Rack Unit", "Network Switch", "Load Balancer Appliance",
-    "GPU Compute Node", "Storage NAS Cluster", "Fiber Optic Cable Set",
-    "UPS Backup System", "Cooling Unit", "Power Distribution Unit",
-    "Security Camera Kit", "Access Control Panel", "Fire Suppression Unit",
-    "Diesel Generator", "Transformer Station", "Smart Meter Array",
-    "Edge Computing Node", "IoT Gateway Device",
-]
-
-
-def generate_asset():
-    """Generate a random asset."""
-    name = random.choice(ASSET_NAMES)
-    suffix = random.randint(100, 999)
+# ─── Stack Generator ─────────────────────────────────────────────────────────
+def generate_stack(username):
+    """Generate a random stack payload for Transfer Stacker."""
+    items = [
+        {"name": random.choice(TS_ITEMS), "qty": random.randint(1, 5)}
+        for _ in range(random.randint(1, 3))
+    ]
     return {
-        "name": f"{name} #{suffix}",
-        "description": f"Auto-generated asset by {POD_NAME}",
-        "price": round(random.uniform(50, 5000), 2),
+        "name": f"Stack from {username}",
+        "items": items,
+        "createdBy": username,
     }
 
 
 # ─── Role Scenarios ──────────────────────────────────────────────────────────
-def run_seller(token, user_id):
-    """Seller: create 2-4 assets and register them in the shared pool."""
+def run_seller(token, user_id, username):
+    """Seller: create 2-4 stacks and register them in the shared pool."""
     actions = []
-    num_assets = random.randint(2, 4)
+    num_stacks = random.randint(2, 4)
 
-    for i in range(num_assets):
-        asset_data = generate_asset()
+    for i in range(num_stacks):
+        stack_data = generate_stack(username)
+        item_summary = ", ".join(f"{it['name']} x{it['qty']}" for it in stack_data["items"])
         try:
-            r = api_post("/api/assets", asset_data, token=token)
+            r = api_post("/stacks", stack_data, token=token)
             if r.status_code in (200, 201):
                 created = r.json()
-                asset_id = created.get("id")
-                actions.append(f"created:{asset_id}")
-                report_action("asset_created", f"{asset_data['name']} (${asset_data['price']:.0f})")
+                stack_id = created.get("id")
+                actions.append(f"created:{stack_id}")
+                report_action("asset_created", f"{stack_data['name']} — {username} — {item_summary}")
 
-                # Register in coordinator pool
+                # Register in coordinator pool so buyers can find it
                 coord_post("/assets", {
-                    "asset_id": asset_id,
+                    "asset_id": stack_id,
                     "owner_id": user_id,
-                    "name": asset_data["name"],
-                    "price": asset_data["price"],
+                    "name": stack_data["name"],
+                    "price": 0,
                 })
-                print(f"[seller] created asset: {asset_data['name']} -> {asset_id}")
+                print(f"[seller] created stack #{stack_id}: {item_summary}")
             else:
                 print(f"[seller] create failed {r.status_code}: {r.text[:120]}")
                 actions.append("create_failed")
@@ -216,50 +232,68 @@ def run_seller(token, user_id):
 
         think(0.5, 1.5)
 
-    # Also browse the asset list to simulate mixed usage
-    try:
-        r = api_get("/api/assets?page=1&pageSize=20", token=token)
-        if r.status_code == 200:
-            data = r.json()
-            total = data.get("totalCount", 0)
-            report_action("asset_listed", f"browsed {total} assets")
-            actions.append(f"browsed:{total}")
-    except Exception:
-        pass
-
     return actions
 
 
-def run_buyer(token, user_id):
-    """Buyer: browse shared pool, claim assets, execute transfers."""
+def run_buyer(token, user_id, username):
+    """Buyer: find open stacks, claim one, execute transfer."""
     actions = []
     max_attempts = 3
 
     for attempt in range(max_attempts):
         think(1, 3)
 
-        # Check coordinator pool for available assets
+        # Check coordinator pool first (only contains stacks created by seller agents)
+        pool = []
         try:
             r = coord_get("/assets", params={"exclude_owner": user_id})
             pool = r.json().get("assets", [])
         except Exception as e:
-            print(f"[buyer] pool fetch failed: {e}")
-            actions.append("pool_error")
-            continue
+            print(f"[buyer] coord pool fetch failed: {e}")
 
         if not pool:
+            # Fall back: scan /stacks directly for any open stack we didn't create
+            try:
+                r = api_get("/stacks", token=token)
+                if r.status_code == 200:
+                    all_stacks = r.json()
+                    open_stacks = [
+                        s for s in all_stacks
+                        if s.get("status") == "open"
+                        and s.get("createdByUserId") != user_id
+                    ]
+                    if open_stacks:
+                        target_stack = random.choice(open_stacks)
+                        stack_id = target_stack["id"]
+                        item_summary = ", ".join(
+                            f"{i['name']} x{i['qty']}" for i in target_stack.get("items", [])
+                        )
+                        report_action("transfer_started",
+                                      f"{target_stack['name']} — {target_stack.get('createdByUsername', '?')} → {username}")
+                        r2 = api_post(f"/stacks/{stack_id}/transfer",
+                                      {"recipient": username}, token=token)
+                        if r2.status_code == 200:
+                            report_action("transfer_completed",
+                                          f"{target_stack['name']} → {username} — {item_summary}")
+                            actions.append(f"transferred:{stack_id}")
+                            print(f"[buyer] direct transfer OK: stack #{stack_id}")
+                        else:
+                            actions.append(f"transfer_failed:{stack_id}")
+                        continue
+            except Exception as e:
+                print(f"[buyer] direct scan error: {e}")
+
             report_action("asset_listed", f"pool empty (attempt {attempt + 1})")
             actions.append("pool_empty")
             think(2, 4)
             continue
 
-        # Pick a random asset to claim
+        # Claim from coordinator pool (race-condition safe)
         target = random.choice(pool)
         asset_id = target["asset_id"]
         seller_id = target["owner_id"]
         report_action("transfer_started", f"claiming {target['name']}")
 
-        # Attempt to claim via coordinator (first-come-first-serve / race condition)
         try:
             r = coord_post("/claim", {
                 "asset_id": asset_id,
@@ -269,44 +303,31 @@ def run_buyer(token, user_id):
             result = r.json()
 
             if result.get("status") == "conflict":
-                # Another agent beat us to it — race condition!
                 print(f"[buyer] CONFLICT: {target['name']} already claimed")
                 report_action("conflict_detected", f"{target['name']} — claimed by another agent")
                 actions.append(f"conflict:{asset_id}")
                 continue
 
-            # Successfully claimed — now execute the actual transfer via backend API
+            # Execute the actual transfer
             print(f"[buyer] claimed: {target['name']} — executing transfer")
-            try:
-                r = api_post(f"/api/assets/{asset_id}/transfer", {
-                    "assetId": asset_id,
-                    "newOwnerId": user_id,
-                }, token=token)
-
-                if r.status_code == 200:
-                    report_action("transfer_completed", f"{target['name']} (${target.get('price', 0):.0f})")
-                    coord_post("/transaction", {
-                        "asset_id": asset_id,
-                        "from": seller_id,
-                        "to": user_id,
-                        "status": "completed",
-                    })
-                    actions.append(f"transferred:{asset_id}")
-                    print(f"[buyer] transfer SUCCESS: {target['name']}")
-                else:
-                    report_action("transfer_failed", f"{target['name']} — {r.status_code}")
-                    coord_post("/transaction", {
-                        "asset_id": asset_id,
-                        "from": seller_id,
-                        "to": user_id,
-                        "status": "failed",
-                    })
-                    actions.append(f"transfer_failed:{asset_id}")
-                    print(f"[buyer] transfer FAILED: {r.status_code} {r.text[:120]}")
-            except Exception as e:
-                report_action("transfer_failed", f"{target['name']} — {e}")
-                actions.append(f"transfer_error:{asset_id}")
-
+            r = api_post(f"/stacks/{asset_id}/transfer",
+                         {"recipient": username}, token=token)
+            if r.status_code == 200:
+                report_action("transfer_completed", f"{target['name']} → {username}")
+                coord_post("/transaction", {
+                    "asset_id": asset_id, "from": seller_id,
+                    "to": user_id, "status": "completed",
+                })
+                actions.append(f"transferred:{asset_id}")
+                print(f"[buyer] transfer SUCCESS: {target['name']}")
+            else:
+                report_action("transfer_failed", f"{target['name']} — {r.status_code}")
+                coord_post("/transaction", {
+                    "asset_id": asset_id, "from": seller_id,
+                    "to": user_id, "status": "failed",
+                })
+                actions.append(f"transfer_failed:{asset_id}")
+                print(f"[buyer] transfer FAILED: {r.status_code}")
         except Exception as e:
             print(f"[buyer] claim error: {e}")
             actions.append("claim_error")
@@ -314,39 +335,35 @@ def run_buyer(token, user_id):
     return actions
 
 
-def run_observer(token, user_id):
-    """Observer: verify system consistency — asset counts, ownership."""
+def run_observer(token, user_id, username):
+    """Observer: verify stack counts and transfer consistency."""
     actions = []
 
     think(2, 5)  # let sellers/buyers get ahead
 
-    # Check asset list from the backend
     try:
-        r = api_get("/api/assets?page=1&pageSize=100", token=token)
+        r = api_get("/stacks", token=token)
         if r.status_code == 200:
-            data = r.json()
-            total = data.get("totalCount", 0)
-            items = data.get("items", [])
+            all_stacks = r.json()
+            open_count = sum(1 for s in all_stacks if s.get("status") == "open")
+            transferred_count = sum(1 for s in all_stacks if s.get("status") == "transferred")
+            owners = set(s.get("createdByUserId") for s in all_stacks if s.get("createdByUserId"))
+            report_action("consistency_check",
+                          f"{len(all_stacks)} stacks: {open_count} open, {transferred_count} transferred, {len(owners)} creators")
+            actions.append(f"observed:{len(all_stacks)}_stacks_{open_count}_open")
+            print(f"[observer] {len(all_stacks)} stacks: {open_count} open, {transferred_count} transferred")
 
-            # Count unique owners
-            owners = set(a.get("userId", "") for a in items if a.get("userId"))
-            report_action("consistency_check", f"{total} assets, {len(owners)} owners")
-            actions.append(f"observed:{total}_assets_{len(owners)}_owners")
-
-            # Cross-check with coordinator pool
+            # Cross-check with coordinator
             try:
                 r2 = coord_get("/stats")
                 stats = r2.json()
                 coord_total = stats.get("transactions", {}).get("total", 0)
                 conflicts = stats.get("transactions", {}).get("conflicts", 0)
                 report_action("consistency_check",
-                              f"txns:{coord_total} conflicts:{conflicts} pool:{stats.get('pool_size', 0)}")
+                              f"coord txns:{coord_total} conflicts:{conflicts} pool:{stats.get('pool_size', 0)}")
                 actions.append(f"verified:txns={coord_total},conflicts={conflicts}")
             except Exception:
                 actions.append("coord_stats_error")
-
-            print(f"[observer] system: {total} assets, {len(owners)} owners, "
-                  f"coordinator has {coord_total} transactions")
         else:
             actions.append(f"observe_failed:{r.status_code}")
     except Exception as e:
@@ -356,43 +373,110 @@ def run_observer(token, user_id):
     return actions
 
 
+# ─── Basic Probe ─────────────────────────────────────────────────────────────
+# Verifies the website loads (HTTP 200) without auth or coordinator interaction.
+# Used when PROBE_MODE=basic.
+
+def run_basic_probe():
+    """Load the target URL in a real browser and verify the login page loads (non-404)."""
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
+    start = time.time()
+    # PROBE_URL is set by the Helm chart (probeUrl value); fall back to TARGET_URL
+    url = os.getenv("PROBE_URL", os.getenv("TARGET_URL", "http://localhost:5174")).rstrip("/")
+
+    print(f"[probe] browser load → {url}")
+    report_action("probe_start", f"target={url}")
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page()
+            try:
+                response = page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                status = response.status if response else 0
+                ok = status != 0 and status != 404
+                label = "ok" if ok else f"http_{status}"
+                print(f"[probe] {status} → {label}")
+                report_action("probe_get", f"{url} → {status}")
+                actions = [f"load:{label}"]
+            except PWTimeout:
+                print(f"[probe] TIMEOUT → {url}")
+                report_action("probe_error", f"{url} → timeout")
+                actions = ["load:timeout"]
+            finally:
+                browser.close()
+    except Exception as exc:
+        print(f"[probe] FAIL → {exc}")
+        report_action("probe_error", f"{url} → {exc}")
+        actions = ["load:error"]
+
+    duration_ms = int((time.time() - start) * 1000)
+    passed = actions and "ok" in actions[0]
+    report_action("probe_done", f"{'ok' if passed else 'failed'} in {duration_ms}ms")
+    print(f"[probe] done in {duration_ms}ms: {actions}")
+    return actions, duration_ms
+
+
 # ─── Main Agent Loop ─────────────────────────────────────────────────────────
 def run_agent():
     start = time.time()
     all_actions = []
 
-    # 1. Register and login
-    token, user_id, username = register_and_login()
+    # 1. Register once and get a persistent identity
+    token, user_id, username, password = register_and_login()
     if not token:
         return ["auth_failed"], int((time.time() - start) * 1000)
     all_actions.append("authenticated")
 
     think(0.5, 1)
 
-    # 2. Register with coordinator and get role
+    # 2. Register with coordinator and get role (stays the same across rounds)
     role = register_with_coordinator(user_id, username, token)
     all_actions.append(f"role:{role}")
 
-    # 3. Execute role-specific scenario
-    if role == "seller":
-        actions = run_seller(token, user_id)
-    elif role == "buyer":
-        actions = run_buyer(token, user_id)
-    elif role == "observer":
-        actions = run_observer(token, user_id)
-    else:
-        actions = ["unknown_role"]
+    # 3. Run for AGENT_ROUNDS rounds, sleeping and re-logging between each
+    for round_num in range(AGENT_ROUNDS):
+        if round_num > 0:
+            print(f"[agent] sleeping {ROUND_SLEEP}s before round {round_num + 1}/{AGENT_ROUNDS}")
+            report_action("agent_sleep",
+                          f"{username} sleeping {ROUND_SLEEP}s (round {round_num + 1}/{AGENT_ROUNDS})")
+            time.sleep(ROUND_SLEEP)
 
-    all_actions.extend(actions)
+            # Re-login for a fresh token
+            new_token, new_uid = relogin(username, password)
+            if new_token:
+                token, user_id = new_token, new_uid
+                report_action("agent_relogin", f"{username} round {round_num + 1}")
+
+        print(f"[agent] round {round_num + 1}/{AGENT_ROUNDS} — role:{role}")
+        report_action("round_start", f"round {round_num + 1}/{AGENT_ROUNDS} role:{role}")
+
+        if role == "seller":
+            actions = run_seller(token, user_id, username)
+        elif role == "buyer":
+            actions = run_buyer(token, user_id, username)
+        elif role == "observer":
+            actions = run_observer(token, user_id, username)
+        else:
+            actions = ["unknown_role"]
+
+        all_actions.extend(actions)
+        think(1, 2)
+
     duration_ms = int((time.time() - start) * 1000)
 
-    # Report a summary event so the dashboard shows what the agent accomplished
-    tx_counts = {k: sum(1 for a in actions if a.startswith(k)) for k in ('transferred:', 'conflict:', 'created:')}
-    summary_parts = [f"role:{role}"]
+    # Summary report
+    tx_counts = {k: sum(1 for a in all_actions if a.startswith(k))
+                 for k in ('transferred:', 'conflict:', 'created:')}
+    summary_parts = [f"role:{role}", f"{AGENT_ROUNDS} rounds"]
     if tx_counts['created:']:
-        summary_parts.append(f"created {tx_counts['created:']} assets")
+        summary_parts.append(f"created {tx_counts['created:']} stacks")
     if tx_counts['transferred:']:
-        summary_parts.append(f"transferred {tx_counts['transferred:']} assets")
+        summary_parts.append(f"transferred {tx_counts['transferred:']} stacks")
     if tx_counts['conflict:']:
         summary_parts.append(f"{tx_counts['conflict:']} conflicts")
     summary_parts.append(f"{duration_ms // 1000}s")
@@ -403,8 +487,12 @@ def run_agent():
 
 if __name__ == "__main__":
     try:
-        actions, duration_ms = run_agent()
-        status = "completed" if not any("error" in a or "failed" in a for a in actions) else "partial"
+        if PROBE_MODE == "basic":
+            actions, duration_ms = run_basic_probe()
+            status = "completed" if actions and "ok" in actions[0] else "partial"
+        else:
+            actions, duration_ms = run_agent()
+            status = "completed" if not any("error" in a or "failed" in a for a in actions) else "partial"
         send_result(status, actions, duration_ms)
         print(f"[agent] done in {duration_ms}ms: {actions}")
     except Exception as e:

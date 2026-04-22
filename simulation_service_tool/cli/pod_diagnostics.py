@@ -1,5 +1,6 @@
 """Interactive pod diagnostics and inspection flows."""
 
+import shutil
 import subprocess
 
 import questionary
@@ -24,10 +25,6 @@ from simulation_service_tool.services.command_runner import run_cli_command
 from simulation_service_tool.services.direct_cleanup import direct_verify_state
 from simulation_service_tool.ui.styles import custom_style
 from simulation_service_tool.ui.utils import clear_screen
-
-
-def _run_command(args, timeout=None):
-    return run_cli_command(args, timeout=timeout)
 
 
 def _pick_debug_pod(pods):
@@ -61,12 +58,12 @@ def _pick_debug_pod(pods):
 
 
 def _get_pod_logs_output(pod_name):
-    result = _run_command(["kubectl", "logs", pod_name, "--tail=120"], timeout=2)
+    result = run_cli_command(["kubectl", "logs", pod_name, "--tail=120"], timeout=2)
     output = result.stdout or result.stderr
     if output.strip() and result.returncode == 0:
         return output
 
-    previous_result = _run_command(["kubectl", "logs", pod_name, "--previous", "--tail=120"], timeout=2)
+    previous_result = run_cli_command(["kubectl", "logs", pod_name, "--previous", "--tail=120"], timeout=2)
     previous_output = previous_result.stdout or previous_result.stderr
     if previous_output.strip():
         return previous_output
@@ -86,6 +83,23 @@ def _get_owner_name(pod):
     if not owner_references:
         return None
     return owner_references[0].get('name')
+
+
+_IMAGE_PULL_STATUSES = frozenset({'ErrImagePull', 'ImagePullBackOff'})
+
+
+def _pod_is_image_pull_error(status: str) -> bool:
+    return status in _IMAGE_PULL_STATUSES
+
+
+def _get_describe_events(pod_name: str) -> str:
+    """Return the Events section from kubectl describe pod."""
+    result = run_cli_command(["kubectl", "describe", "pod", pod_name], timeout=6)
+    text = result.stdout or result.stderr or ""
+    idx = text.find("\nEvents:")
+    if idx != -1:
+        return text[idx + 1:].strip()
+    return text.strip()
 
 
 def _get_stale_status_for_pod(pod):
@@ -301,12 +315,14 @@ def view_agent_logs():
         return
 
     pod_choices = []
+    status_map: dict[str, str] = {}
     for pod in pods:
         name = (pod.get('metadata', {}) or {}).get('name', 'unknown')
         status = _pod_status_value(pod)
         restarts = _pod_restart_count(pod)
         age = _format_pod_age((pod.get('metadata', {}) or {}).get('creationTimestamp'))
         label = f"{name}  [{status}  restarts={restarts}  age={age}]"
+        status_map[name] = status
         pod_choices.append(questionary.Choice(title=label, value=name))
 
     pod_choices.append(questionary.Separator())
@@ -322,6 +338,31 @@ def view_agent_logs():
         return
 
     if not pod_name or pod_name == "__back__":
+        return
+
+    if _pod_is_image_pull_error(status_map.get(pod_name, "")):
+        # Container never started — kubectl logs gives BadRequest. Show describe events instead.
+        print(f"\n  \033[33m[IMAGE PULL ERROR]\033[0m Container never started — showing kubectl describe events instead.\n")
+        events_text = _get_describe_events(pod_name)
+        if events_text:
+            for line in events_text.splitlines():
+                print(f"  {line}")
+        else:
+            print("  (no describe output available)")
+        try:
+            action = questionary.select(
+                "Next:",
+                choices=[
+                    questionary.Choice(title="Open Image Pull Debugger", value="image_pull"),
+                    questionary.Choice(title="Back", value="back"),
+                ],
+                style=custom_style,
+            ).ask()
+        except KeyboardInterrupt:
+            return
+        if action == "image_pull":
+            from simulation_service_tool.menus.image_pull import image_pull_menu
+            image_pull_menu()
         return
 
     print(f"\n  \033[36m[INFO]\033[0m Fetching logs for {pod_name}...")
@@ -351,8 +392,14 @@ def view_agent_logs():
 
     if action == "stream":
         print(f"\n  Streaming logs for {pod_name}  (Ctrl+C to stop)...\n")
+        if not shutil.which("kubectl"):
+            print("  [WARN] kubectl not found — cannot stream pod logs.")
+            _prompt_go_back()
+            return
         try:
             subprocess.run(["kubectl", "logs", "-f", pod_name], check=False)
+        except FileNotFoundError:
+            print("  [WARN] kubectl not found — cannot stream pod logs.")
         except KeyboardInterrupt:
             print("\n  Stopped streaming.")
         _prompt_go_back()

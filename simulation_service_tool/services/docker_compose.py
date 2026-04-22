@@ -105,6 +105,46 @@ def up(build=False, detach=True):
         return {'success': False, 'error': str(exc)}
 
 
+def up_streaming(build=False, detach=True):
+    """Start the Docker Compose stack, streaming output to stdout/stderr live.
+
+    Unlike ``up()``, this does not capture output so the user sees build
+    progress in real time.  Returns a dict with 'success' bool and an
+    optional 'error' string (last 2 KB of stderr on failure).
+    """
+    import io
+    cmd = _compose_cmd() + ['up']
+    if build:
+        cmd.append('--build')
+    if detach:
+        cmd.append('-d')
+    try:
+        # Capture stderr for error detection while letting stdout stream live.
+        proc = subprocess.Popen(
+            cmd,
+            stdout=None,    # inherit — streams to terminal
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stderr_buf = io.StringIO()
+        # Read stderr line-by-line so we can both print it live and capture it.
+        for line in proc.stderr:
+            print(line, end='', flush=True)
+            stderr_buf.write(line)
+        proc.wait(timeout=300)
+        if proc.returncode == 0:
+            return {'success': True}
+        err = stderr_buf.getvalue().strip()
+        return {'success': False, 'error': err or 'docker compose up failed'}
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return {'success': False, 'error': 'docker compose up timed out after 5 minutes'}
+    except FileNotFoundError:
+        return {'success': False, 'error': 'docker command not found'}
+    except OSError as exc:
+        return {'success': False, 'error': str(exc)}
+
+
 def down(volumes=False):
     """Stop the Docker Compose stack.
 
