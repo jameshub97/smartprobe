@@ -1,6 +1,6 @@
 
 # 1. All imports first
-from flask import Flask, jsonify, request, Response, send_from_directory
+from flask import Flask, jsonify, request, Response, send_from_directory, has_request_context
 from flask_cors import CORS
 
 # Prometheus metrics
@@ -32,6 +32,7 @@ import subprocess
 import json
 import re
 import hashlib
+from pathlib import Path
 import threading
 import queue
 import time
@@ -162,6 +163,33 @@ SIMULATION_ACTIVE_TEST = Info(
 )
 # Initialise to empty so the metric is always present
 SIMULATION_ACTIVE_TEST.info({'target_url': '', 'probe_mode': '', 'test_name': '', 'completions': '', 'parallelism': ''})
+_EMPTY_ACTIVE_TEST = {'target_url': '', 'probe_mode': '', 'test_name': '', 'completions': '', 'parallelism': ''}
+_ACTIVE_TEST_STATE_PATH = Path(__file__).with_name('.simulation_active_test_state.json')
+
+
+def _load_last_active_test() -> dict:
+    try:
+        payload = json.loads(_ACTIVE_TEST_STATE_PATH.read_text())
+    except Exception:
+        return dict(_EMPTY_ACTIVE_TEST)
+
+    return {
+        'target_url': str(payload.get('target_url') or ''),
+        'probe_mode': str(payload.get('probe_mode') or ''),
+        'test_name': str(payload.get('test_name') or ''),
+        'completions': str(payload.get('completions') or ''),
+        'parallelism': str(payload.get('parallelism') or ''),
+    }
+
+
+def _persist_last_active_test(payload: dict) -> None:
+    try:
+        _ACTIVE_TEST_STATE_PATH.write_text(json.dumps(payload))
+    except Exception:
+        logger.debug('Failed to persist last active test state', exc_info=True)
+
+
+_LAST_ACTIVE_TEST = _load_last_active_test()
 
 # ── Application constants ──────────────────────────────────────────────────────
 
@@ -1270,6 +1298,45 @@ _event_totals: dict = {
 }
 
 
+def _reset_run_state() -> None:
+    """Clear run-scoped dashboard state before starting a new simulation."""
+    with _log_lock:
+        _activity_log.clear()
+        _agent_results.clear()
+        _agent_states.clear()
+        _previous_pod_states.clear()
+        for key in _event_totals:
+            _event_totals[key] = 0
+
+    while True:
+        try:
+            _event_queue.get_nowait()
+        except queue.Empty:
+            break
+        else:
+            _event_queue.task_done()
+
+    _cache['data'] = None
+    _cache['timestamp'] = None
+
+
+def _set_active_test(payload: Optional[dict] = None) -> dict:
+    data = dict(_EMPTY_ACTIVE_TEST)
+    if payload:
+        data.update({
+            'target_url': str(payload.get('target_url') or ''),
+            'probe_mode': str(payload.get('probe_mode') or ''),
+            'test_name': str(payload.get('test_name') or ''),
+            'completions': str(payload.get('completions') or ''),
+            'parallelism': str(payload.get('parallelism') or ''),
+        })
+        if any(data.values()):
+            _LAST_ACTIVE_TEST.update(data)
+            _persist_last_active_test(_LAST_ACTIVE_TEST)
+    SIMULATION_ACTIVE_TEST.info(data)
+    return data
+
+
 def _log_consumer():
     """Drain _event_queue, deduplicate bursts, write to _activity_log under lock."""
     # Track the last entry written per pod to suppress identical bursts.
@@ -1583,19 +1650,21 @@ class TestController:
         values['probeMode'] = probe_mode or 'basic'
         if probe_url:
             values['probeUrl'] = probe_url
-        _active_target = probe_url or values.get('targetUrl', '')
-        SIMULATION_ACTIVE_TEST.info({
-            'target_url': _active_target,
+        active_test_payload = {
+            'target_url': probe_url or values.get('targetUrl', ''),
             'probe_mode': values['probeMode'],
             'test_name': name,
             'completions': str(completions),
             'parallelism': str(parallelism),
-        })
+        }
 
         logger.info(f"🚀 Starting test '{name}' with {completions} agents (mode={values['probeMode']})")
         result = helm_client.install(name, "./helm/playwright-agent", values, wait=wait)
-        
+
         if result['success']:
+            _set_active_test(active_test_payload)
+            if not has_request_context():
+                _sync_active_test_to_service(active_test_payload)
             return {
                 'success': True,
                 'name': name,
@@ -1628,7 +1697,9 @@ class TestController:
         logger.info(f"🛑 Stopping test '{name}'")
         result = helm_client.uninstall(name)
         if result['success']:
-            SIMULATION_ACTIVE_TEST.info({'target_url': '', 'probe_mode': '', 'test_name': '', 'completions': '', 'parallelism': ''})
+            _set_active_test()
+            if not has_request_context():
+                _sync_active_test_to_service()
             return {'success': True, 'name': name}
         else:
             return {'success': False, 'error': result['stderr']}
@@ -2051,6 +2122,22 @@ def _read_prometheus_gauges() -> dict:
         except Exception:
             return 0
 
+    def _histogram_average(h):
+        try:
+            total_sum = 0.0
+            total_count = 0.0
+            for metric in h.collect():
+                for sample in getattr(metric, 'samples', []):
+                    if sample.name.endswith('_sum'):
+                        total_sum += float(sample.value)
+                    elif sample.name.endswith('_count'):
+                        total_count += float(sample.value)
+            if total_count > 0:
+                return round(total_sum / total_count, 1)
+        except Exception:
+            return None
+        return None
+
     return {
         'active': _gauge_val(AGENT_PODS_ACTIVE),
         'succeeded': _gauge_val(AGENT_PODS_SUCCEEDED),
@@ -2072,8 +2159,92 @@ def _read_prometheus_gauges() -> dict:
         'kueue_pending': _gauge_val(KUEUE_PENDING_WORKLOADS),
         'kueue_admitted': _gauge_val(KUEUE_ADMITTED_WORKLOADS),
         'kueue_active': _gauge_val(KUEUE_ACTIVE),
+        'avg_duration': _histogram_average(AGENT_TEST_DURATION),
         'active_test': getattr(SIMULATION_ACTIVE_TEST, '_value', {}),
+        'last_target_url': _LAST_ACTIVE_TEST.get('target_url', ''),
     }
+
+
+def _enrich_summary_with_prometheus(summary: dict, prom: dict | None = None) -> dict:
+    """Backfill throughput stats from Prometheus when the live k8s summary is empty."""
+    prom = prom or _read_prometheus_gauges()
+    throughput = dict(summary.get('throughput') or {})
+
+    rate_per_second = throughput.get('agentsPerSecond')
+    rate_per_minute = throughput.get('agentsPerMinute')
+    try:
+        if rate_per_second in (None, '') and rate_per_minute not in (None, ''):
+            throughput['agentsPerSecond'] = round(float(rate_per_minute) / 60.0, 2)
+        elif rate_per_minute in (None, '') and rate_per_second not in (None, ''):
+            throughput['agentsPerMinute'] = round(float(rate_per_second) * 60.0, 1)
+    except (TypeError, ValueError):
+        pass
+
+    avg_duration = throughput.get('avgDuration')
+    if avg_duration in (None, 0):
+        avg_duration = summary.get('avg_duration')
+    if avg_duration in (None, 0):
+        avg_duration = prom.get('avg_duration')
+
+    if avg_duration not in (None, 0) and summary.get('avg_duration') in (None, 0):
+        summary['avg_duration'] = avg_duration
+
+    if any(key in throughput for key in ('agentsPerSecond', 'agentsPerMinute', 'etaSeconds', 'avgDuration')):
+        if avg_duration not in (None, 0) and throughput.get('avgDuration') in (None, 0):
+            throughput['avgDuration'] = round(float(avg_duration), 1)
+        summary['throughput'] = throughput
+        return summary
+
+    active_test = prom.get('active_test') or {}
+    try:
+        total_target = int(active_test.get('completions') or 0)
+    except (TypeError, ValueError):
+        total_target = 0
+
+    with _log_lock:
+        event_totals = dict(_event_totals)
+
+    event_done = float((event_totals.get('agent_done') or 0) + (event_totals.get('probe_done') or 0))
+    event_failed = float(event_totals.get('probe_error') or 0)
+    event_started = float((event_totals.get('registered') or 0) + (event_totals.get('probe_start') or 0))
+    event_active = max(event_started - event_done - event_failed, 0.0)
+
+    prom_active = max(float(prom.get('active') or 0), 0.0)
+    prom_succeeded = max(float(prom.get('succeeded') or 0), 0.0)
+    prom_failed = max(float(prom.get('failed') or 0), 0.0)
+    prom_pending = max(float(prom.get('pending') or 0), 0.0)
+
+    live_from_prom = prom_active + prom_succeeded + prom_failed + prom_pending > 0
+    active = prom_active if live_from_prom else event_active
+    succeeded = prom_succeeded if live_from_prom else event_done
+    failed = prom_failed if live_from_prom else event_failed
+    pending = prom_pending if live_from_prom else 0.0
+    completed_raw = succeeded + failed
+    completed = min(completed_raw, float(total_target)) if total_target > 0 else completed_raw
+    in_flight = active + pending
+
+    if avg_duration not in (None, 0):
+        throughput['avgDuration'] = round(float(avg_duration), 1)
+    throughput['completed'] = int(round(completed))
+
+    if total_target > 0:
+        throughput['percentComplete'] = round((completed / total_target) * 100, 1)
+
+    if avg_duration not in (None, 0) and in_flight > 0:
+        rate = in_flight / float(avg_duration)
+        throughput['agentsPerSecond'] = round(rate, 2)
+        throughput['agentsPerMinute'] = round(rate * 60, 1)
+        if total_target > 0:
+            remaining = max(total_target - completed, 0.0)
+            throughput['etaSeconds'] = round(remaining / rate, 1) if rate > 0 else 0
+    elif total_target > 0 and completed >= total_target:
+        throughput['etaSeconds'] = 0
+
+    if throughput:
+        throughput['source'] = 'prometheus'
+        summary['throughput'] = throughput
+
+    return summary
 
 
 # Flask API endpoints
@@ -2134,6 +2305,7 @@ def simulation_summary():
     # Enrich response with cumulative Prometheus counters so the dashboard
     # shows lifetime totals even when no pods are currently running.
     data['prometheus'] = _read_prometheus_gauges()
+    _enrich_summary_with_prometheus(data, data['prometheus'])
     # Coordinator stats (fetched from coordinator_service on port 5003)
     data['coordinator'] = _coordinator_stats_safe()
     return jsonify(data)
@@ -2423,6 +2595,33 @@ def _coordinator_reset_safe():
         pass
 
 
+def _sync_active_test_to_service(payload: Optional[dict] = None) -> None:
+    """Mirror active-test state into the running dashboard service from host CLI mode."""
+    service_url = os.environ.get('SIMULATION_SERVICE_URL', 'http://localhost:5002').rstrip('/')
+    headers = {'Authorization': f'Bearer {SIMULATION_API_KEY}'}
+    try:
+        import requests as _req
+        if payload:
+            _req.post(f'{service_url}/api/simulation/active-test', json=payload, headers=headers, timeout=2)
+        else:
+            _req.delete(f'{service_url}/api/simulation/active-test', headers=headers, timeout=2)
+    except Exception:
+        pass
+
+
+@app.route('/api/simulation/active-test', methods=['POST', 'DELETE'])
+@require_api_key
+def sync_active_test():
+    """Update run-scoped dashboard state for host-launched CLI runs."""
+    if request.method == 'DELETE':
+        _set_active_test()
+        return jsonify({'status': 'ok'})
+
+    payload = request.get_json(force=True) or {}
+    _reset_run_state()
+    return jsonify({'status': 'ok', 'active_test': _set_active_test(payload)})
+
+
 @app.route('/api/simulation/coordinator/<path:subpath>', methods=['GET', 'POST'])
 def coordinator_proxy(subpath):
     """Proxy coordinator API requests — keeps dashboard same-origin in local dev."""
@@ -2478,6 +2677,7 @@ def start_simulation():
 
     # Reset coordinator state for the new run
     _coordinator_reset_safe()
+    _reset_run_state()
 
     # Both basic and transactional modes use the custom playwright-agent image
     # which contains run.py. The raw mcr.microsoft.com/playwright image has no

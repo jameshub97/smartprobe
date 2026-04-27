@@ -178,7 +178,8 @@ def _build_direct_helm_values(payload: dict) -> dict:
     image_tag = (payload.get('imageTag') or '').strip() or 'latest'
     command_override = (payload.get('commandOverride') or '').strip() or 'python3 /app/run.py'
     ttl = payload.get('ttlSecondsAfterFinished', 3600)
-    probe_mode = (payload.get('mode') or 'transactional').strip()
+    probe_mode = (payload.get('mode') or 'basic').strip()
+    probe_url = (payload.get('probeUrl') or '').strip().rstrip('/')
 
     values: dict = {
         'completions': payload.get('completions', 10),
@@ -217,7 +218,23 @@ def _build_direct_helm_values(payload: dict) -> dict:
         values['kueue.enabled'] = True
         values['kueue.queueName'] = 'simulation-queue'
 
+    if probe_url:
+        values['probeUrl'] = probe_url
+
     return values
+
+
+def _build_active_test_payload(name: str, payload: dict, values: dict | None = None) -> dict:
+    """Build the dashboard active-test payload for host-launched runs."""
+    helm_values = values or _build_direct_helm_values(payload)
+    probe_url = (payload.get('probeUrl') or '').strip().rstrip('/')
+    return {
+        'target_url': probe_url or helm_values.get('targetUrl', ''),
+        'probe_mode': str(helm_values.get('probeMode') or 'basic'),
+        'test_name': name,
+        'completions': str(payload.get('completions') or ''),
+        'parallelism': str(payload.get('parallelism') or ''),
+    }
 
 
 def _check_node_images_prelaunch() -> bool:
@@ -365,6 +382,7 @@ def _run_direct_helm_install(name: str, payload: dict) -> tuple[bool, str]:
 
     result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
     if result.returncode == 0:
+        call_service('/api/simulation/active-test', 'POST', _build_active_test_payload(name, payload, values))
         return True, ''
     err = (result.stderr or result.stdout or 'helm install failed').strip()
     return False, err

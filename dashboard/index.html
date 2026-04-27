@@ -87,9 +87,9 @@
         <p class="text-xs text-indigo-500 mt-1">/api/simulation will be appended automatically</p>
       </div>
     </div>
-    <!-- Active test target URL (shown when a test is running) -->
+    <!-- Connected API target URL -->
     <span id="target-url-badge" class="hidden items-center gap-1.5 bg-indigo-800/60 border border-indigo-600/50 rounded px-2 py-0.5">
-      <span class="text-xs text-indigo-400 font-medium uppercase tracking-wide">target</span>
+      <span class="text-xs text-indigo-400 font-medium uppercase tracking-wide">connected to</span>
       <a id="target-url-text" href="#" target="_blank" rel="noopener"
         class="text-xs font-mono text-cyan-300 hover:text-white truncate max-w-[220px] transition-colors"></a>
     </span>
@@ -104,25 +104,25 @@
   <div class="bg-white border border-slate-300 rounded-xl shadow-sm px-5 py-3 space-y-2">
     <div class="flex items-center gap-4 flex-wrap text-sm font-mono">
       <!-- Test config -->
-      <span><span class="text-slate-400 text-xs">simulation_target</span> <span id="s-total" class="font-bold text-slate-700 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Simulation Target</span> <span id="s-total" class="font-bold text-slate-700 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">simulation_parallelism</span> <span id="s-parallelism" class="font-bold text-violet-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Simulation Parallelism</span> <span id="s-parallelism" class="font-bold text-violet-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
       <!-- Pod counts (from Prometheus gauges) -->
-      <span><span class="text-slate-400 text-xs">agent_pods_active</span> <span id="s-pods" class="font-bold text-indigo-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Agent Pods Active</span> <span id="s-pods" class="font-bold text-indigo-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">agent_pods_succeeded</span> <span id="s-success" class="font-bold text-emerald-400 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Agent Pods Succeeded</span> <span id="s-success" class="font-bold text-green-400 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">agent_pods_failed</span> <span id="s-errors" class="font-bold text-red-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Agent Pods Failed</span> <span id="s-errors" class="font-bold text-red-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">agent_pods_pending</span> <span id="s-pending" class="font-bold text-amber-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Agent Pods Pending</span> <span id="s-pending" class="font-bold text-amber-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
       <!-- Throughput + ETA (from perf calcs) -->
-      <span><span class="text-slate-400 text-xs">simulation_throughput</span> <span id="p-rate" class="font-bold text-orange-500 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Simulation Throughput</span> <span id="p-rate" class="font-bold text-orange-500 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">simulation_eta</span> <span id="p-eta" class="font-bold text-sky-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Simulation ETA</span> <span id="p-eta" class="font-bold text-sky-600 ml-1">—</span></span>
       <span class="text-slate-200">|</span>
-      <span><span class="text-slate-400 text-xs">agent_test_duration_avg</span> <span id="p-avg" class="font-bold text-slate-600 ml-1">—</span></span>
+      <span><span class="text-slate-400 text-xs">Agent Test Duration Avg</span> <span id="p-avg" class="font-bold text-slate-600 ml-1">—</span></span>
       <!-- Kueue extras injected by JS -->
       <span id="kueue-section" class="hidden contents">
         <span class="text-slate-200">|</span>
@@ -496,8 +496,63 @@ const _defaultBase = params.get('api')
   ? params.get('api').replace(/\/$/, '')
   : window.location.origin
 let API_BASE = _defaultBase + '/api/simulation'
+const LAST_TARGET_URL_KEY = 'smartprobe:last-target-url'
 document.getElementById('api-label').textContent = API_BASE
 document.getElementById('endpoint-input').value = _defaultBase
+
+function readRememberedTargetUrl() {
+  try {
+    return localStorage.getItem(LAST_TARGET_URL_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberTargetUrl(url) {
+  try {
+    if (url) {
+      localStorage.setItem(LAST_TARGET_URL_KEY, url)
+    }
+  } catch {}
+}
+
+function normalizeDashboardUrl(url) {
+  return (url || '')
+    .replace(/^https?:\/\//, '')
+    .replace(/^host\.docker\.internal(?=[:/]|$)/, window.location.hostname || 'localhost')
+}
+
+function toBrowserReachableUrl(url) {
+  if (!url) return '#'
+  return url.replace(
+    /^https?:\/\/host\.docker\.internal(?=[:/]|$)/,
+    `${window.location.protocol}//${window.location.hostname || 'localhost'}`,
+  )
+}
+
+function renderConnectedApiBadge(url) {
+  const remembered = readRememberedTargetUrl()
+  const targetUrl = (url || remembered || '').trim()
+  const badge = document.getElementById('target-url-badge')
+  const urlEl = document.getElementById('target-url-text')
+
+  if (targetUrl) {
+    if (url) rememberTargetUrl(url)
+    badge.classList.remove('hidden')
+    badge.classList.add('inline-flex')
+    urlEl.textContent = normalizeDashboardUrl(targetUrl)
+    urlEl.href = toBrowserReachableUrl(targetUrl)
+    urlEl.title = targetUrl
+  } else {
+    badge.classList.add('hidden')
+    badge.classList.remove('inline-flex')
+    urlEl.textContent = ''
+    urlEl.href = '#'
+    urlEl.removeAttribute('title')
+  }
+}
+
+renderConnectedApiBadge('')
 
 // ─── Endpoint switcher ───────────────────────────────────────────────────────
 function toggleEndpointEdit() {
@@ -859,35 +914,25 @@ function updateStats(data) {
 
   setText('s-total',       specTotal       || infoTotal     || data.total || dispTotal || '—')
   setText('s-parallelism', specParallelism || infoParallel  || '—')
-  const targetUrl  = activeTest.target_url || ''
-  const badge      = document.getElementById('target-url-badge')
-  const urlEl      = document.getElementById('target-url-text')
-  if (targetUrl) {
-    badge.classList.remove('hidden')
-    badge.classList.add('flex')
-    urlEl.textContent = targetUrl.replace(/^https?:\/\//, '')
-    urlEl.href        = targetUrl
-  } else {
-    badge.classList.add('hidden')
-    badge.classList.remove('flex')
-  }
+  const targetUrl  = activeTest.target_url || (data.prometheus || {}).last_target_url || ''
+  renderConnectedApiBadge(targetUrl)
 
   setText('s-pods',    dispActive)
   setText('s-success', dispSuccess)
   setText('s-errors',  dispFailed)
   setText('s-pending', dispPending)
 
-  // Success shade: emerald, brighter as rate increases
+  // Success shade: standard green to match the breakdown bar
   const successEl = document.getElementById('s-success')
   if (successEl && dispTotal > 0) {
     const rate = dispSuccess / dispTotal
-    const shade = rate >= 0.95 ? 'text-emerald-300'
-                : rate >= 0.85 ? 'text-emerald-400'
-                : rate >= 0.70 ? 'text-emerald-500'
-                : rate >= 0.50 ? 'text-emerald-600'
-                : rate >= 0.25 ? 'text-emerald-700'
-                :                'text-emerald-800'
-    successEl.className = successEl.className.replace(/text-emerald-\d+/, shade)
+    const shade = rate >= 0.95 ? 'text-green-400'
+                : rate >= 0.85 ? 'text-green-500'
+                : rate >= 0.70 ? 'text-green-600'
+                : rate >= 0.50 ? 'text-green-700'
+                : rate >= 0.25 ? 'text-green-800'
+                :                'text-green-900'
+    successEl.className = successEl.className.replace(/text-(?:emerald|green)-\d+/, shade)
   }
 
   // Agent breakdown bar — denominator is the spec total so bar fills against the full 100-agent target
@@ -915,10 +960,21 @@ function updateStats(data) {
   }
 
   // Perf
-  const t = data.throughput
-  if (t && t.completed) {
-    setText('p-rate', t.agentsPerSecond >= 1 ? `${t.agentsPerSecond}/s` : `${t.agentsPerMinute}/m`)
-    setText('p-eta',  t.etaSeconds > 0 ? fmtTime(t.etaSeconds) : 'done')
+  const t = data.throughput && Object.keys(data.throughput).length ? data.throughput : null
+  const hasPerf = t && (
+    t.completed > 0 ||
+    t.avgDuration != null ||
+    t.etaSeconds != null ||
+    t.agentsPerSecond != null ||
+    t.agentsPerMinute != null
+  )
+  if (hasPerf) {
+    const ratePerSecond = Number(t.agentsPerSecond)
+    const fallbackRatePerMinute = Number.isFinite(ratePerSecond) ? +(ratePerSecond * 60).toFixed(1) : NaN
+    const ratePerMinute = Number.isFinite(Number(t.agentsPerMinute)) ? Number(t.agentsPerMinute) : fallbackRatePerMinute
+    const hasRate = Number.isFinite(ratePerSecond) && ratePerSecond > 0
+    setText('p-rate', hasRate ? (ratePerSecond >= 1 ? `${ratePerSecond}/s` : `${ratePerMinute}/m`) : '—')
+    setText('p-eta',  t.etaSeconds == null ? '—' : (t.etaSeconds > 0 ? fmtTime(t.etaSeconds) : 'done'))
     setText('p-avg',  t.avgDuration != null ? `${t.avgDuration}s` : '—')
   } else {
     ['p-rate','p-eta','p-avg'].forEach(id => setText(id, '—'))

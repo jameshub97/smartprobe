@@ -237,3 +237,142 @@ class TestDashboardPolling:
         label = dashboard_page.locator("#api-label").inner_text().strip()
         # It may be empty when no test is running — just assert no JS crash
         assert isinstance(label, str)
+
+    def test_perf_stats_render_when_summary_has_backfilled_throughput(self, page):
+        """Top stats should render ETA/avg even when completed is zero."""
+
+        def fulfill_json(route, payload):
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=__import__('json').dumps(payload),
+            )
+
+        page.route(
+            "**/api/simulation/summary",
+            lambda route: fulfill_json(route, {
+                "total": 0,
+                "success": 0,
+                "running": 16,
+                "pending": 0,
+                "errors": 0,
+                "results": [],
+                "jobs": {},
+                "kueue": {"active": False},
+                "coordinator": {"agents": 0, "roles": {}, "pool_size": 0, "transactions": {"total": 0, "completed": 0, "conflicts": 0, "failed": 0}},
+                "prometheus": {
+                    "active": 16,
+                    "succeeded": 153,
+                    "failed": 0,
+                    "pending": 0,
+                    "avg_duration": 2.0,
+                    "active_test": {
+                        "completions": "100",
+                        "parallelism": "20",
+                        "probe_mode": "basic",
+                        "target_url": "http://localhost:5174",
+                        "test_name": "large-123",
+                    },
+                },
+                "throughput": {
+                    "completed": 0,
+                    "avgDuration": 2.0,
+                    "etaSeconds": 10.0,
+                    "agentsPerSecond": 0.5,
+                    "agentsPerMinute": 30.0,
+                    "source": "prometheus",
+                },
+            }),
+        )
+        page.route(
+            "**/api/simulation/activity?limit=*",
+            lambda route: fulfill_json(route, {
+                "activity": [],
+                "summary": {"sleeping": 0, "pending": 0, "running": 16},
+                "totals": {},
+            }),
+        )
+        page.route(
+            "**/api/simulation/agent-states",
+            lambda route: fulfill_json(route, {"states": {}}),
+        )
+        page.route(
+            "**/api/simulation/coordinator/agents",
+            lambda route: fulfill_json(route, {"agents": []}),
+        )
+
+        page.goto(BASE_URL + "/")
+        page.wait_for_timeout(1000)
+
+        assert page.locator("#p-rate").inner_text().strip() == "30/m"
+        assert page.locator("#p-eta").inner_text().strip() == "10s"
+        assert page.locator("#p-avg").inner_text().strip() == "2s"
+
+    def test_perf_stats_derive_per_minute_when_summary_omits_it(self, page):
+        """Top stats should not render undefined/m when only agentsPerSecond is present."""
+
+        def fulfill_json(route, payload):
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=__import__('json').dumps(payload),
+            )
+
+        page.route(
+            "**/api/simulation/summary",
+            lambda route: fulfill_json(route, {
+                "total": 0,
+                "success": 0,
+                "running": 0,
+                "pending": 0,
+                "errors": 0,
+                "results": [],
+                "jobs": {},
+                "kueue": {"active": False},
+                "coordinator": {"agents": 0, "roles": {}, "pool_size": 0, "transactions": {"total": 0, "completed": 0, "conflicts": 0, "failed": 0}},
+                "prometheus": {
+                    "active": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "pending": 0,
+                    "avg_duration": 2.0,
+                    "active_test": {
+                        "completions": "10",
+                        "parallelism": "5",
+                        "probe_mode": "basic",
+                        "target_url": "http://localhost:5174",
+                        "test_name": "small-123",
+                    },
+                },
+                "throughput": {
+                    "completed": 0,
+                    "avgDuration": 2.0,
+                    "etaSeconds": 10.0,
+                    "agentsPerSecond": 0.5,
+                    "source": "prometheus",
+                },
+            }),
+        )
+        page.route(
+            "**/api/simulation/activity?limit=*",
+            lambda route: fulfill_json(route, {
+                "activity": [],
+                "summary": {"sleeping": 0, "pending": 0, "running": 0},
+                "totals": {},
+            }),
+        )
+        page.route(
+            "**/api/simulation/agent-states",
+            lambda route: fulfill_json(route, {"states": {}}),
+        )
+        page.route(
+            "**/api/simulation/coordinator/agents",
+            lambda route: fulfill_json(route, {"agents": []}),
+        )
+
+        page.goto(BASE_URL + "/")
+        page.wait_for_timeout(1000)
+
+        assert page.locator("#p-rate").inner_text().strip() == "30/m"
+        assert page.locator("#p-eta").inner_text().strip() == "10s"
+        assert page.locator("#p-avg").inner_text().strip() == "2s"

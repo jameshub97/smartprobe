@@ -25,6 +25,7 @@ from simulation_service import (
     _event_totals,
     _cache,
     _read_prometheus_gauges,
+    _enrich_summary_with_prometheus,
     _coordinator_stats_safe,
     _coordinator_reset_safe,
     MAX_LOG_ENTRIES,
@@ -101,6 +102,7 @@ def simulation_summary():
         data['kueue'] = {'active': False}
 
     data['prometheus'] = _read_prometheus_gauges()
+    _enrich_summary_with_prometheus(data, data['prometheus'])
     data['coordinator'] = _coordinator_stats_safe()
     return jsonify(data)
 

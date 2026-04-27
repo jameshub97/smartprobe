@@ -72,6 +72,7 @@ services:
     volumes:
       - ./simulation_service.py:/app/simulation_service.py:ro
       - ./dashboard:/app/dashboard:ro
+      - ./.simulation_active_test_state.json:/app/.simulation_active_test_state.json
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
       interval: 15s

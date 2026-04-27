@@ -15,3 +15,7 @@ build/
 .env.*
 !.env.example
 .DS_Store
+.simulation_active_test_state.json
+
+*** Add File: /Users/james/Documents/coding_work/smartprobe/.simulation_active_test_state.json
+{"target_url":"http://localhost:5174","probe_mode":"basic","test_name":"","completions":"","parallelism":""}
